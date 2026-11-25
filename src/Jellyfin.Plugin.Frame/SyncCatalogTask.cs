@@ -13,7 +13,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         Timeout = TimeSpan.FromSeconds(30),
         MaxResponseContentBufferSize = 8 * 1024 * 1024
     };
-    private static readonly SemaphoreSlim SyncLock = new(1);
+    internal static readonly SemaphoreSlim SyncLock = new(1);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private const int MaxPages = 100;
 
@@ -34,7 +34,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         try
         {
             var config = Plugin.Instance?.Configuration;
-            if (config is null || string.IsNullOrWhiteSpace(config.CatalogUrl))
+            if (config is null || config.OnDemand || string.IsNullOrWhiteSpace(config.CatalogUrl))
                 return;
 
             var catalog = ParseHttps(config.CatalogUrl);
@@ -174,7 +174,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         await ImportArtwork(series, item.Images, hosts, cancellationToken);
     }
 
-    private static async Task ImportArtwork(string folder, FrameImages? images, HashSet<string> hosts,
+    internal static async Task ImportArtwork(string folder, FrameImages? images, HashSet<string> hosts,
         CancellationToken cancellationToken)
     {
         if (images is null)
@@ -212,6 +212,19 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             uri.Scheme != Uri.UriSchemeHttps || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0)
             throw new InvalidDataException("URL HTTPS inválida.");
         return uri;
+    }
+
+    internal static bool MediaUrlAllowed(string? value, HashSet<string> hosts)
+    {
+        try
+        {
+            _ = MediaUrl(value, hosts);
+            return true;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
     }
 
     private static string MediaUrl(string? value, HashSet<string> hosts)

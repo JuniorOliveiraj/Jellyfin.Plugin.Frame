@@ -1,45 +1,202 @@
 <div id="frameConfig" data-role="page" class="page type-interior pluginConfigurationPage">
     <div data-role="content" class="content-primary">
-        <form>
+        <form id="frameSettings">
             <h2>Frame</h2>
-            <p>Configure o catálogo e execute Frame — Sincronizar catálogo nas tarefas agendadas.</p>
-            <p>Para um catálogo autenticado, configure FRAME_API_TOKEN no ambiente do servidor.</p>
-            <div class="inputContainer"><label for="frameCatalog">URL HTTPS de listagem</label><input is="emby-input" id="frameCatalog" type="url"></div>
+            <div class="checkboxContainer"><label><input is="emby-checkbox" id="frameOnDemand" type="checkbox"><span>Importar filmes sob demanda</span></label></div>
+            <div class="inputContainer" id="frameBrowseSettings">
+                <label for="frameBrowseUrl">URL base HTTPS da API FILMES-JR</label>
+                <input is="emby-input" id="frameBrowseUrl" type="url">
+
+            </div>
+            <div id="frameCatalogSettings">
+                <div class="inputContainer"><label for="frameCatalog">URL HTTPS de listagem</label><input is="emby-input" id="frameCatalog" type="url"></div>
+                <div class="inputContainer"><label for="frameSeries">Pasta dedicada a séries (opcional)</label><input is="emby-input" id="frameSeries"></div>
+                <p>Execute Frame — Sincronizar catálogo nas tarefas agendadas.</p>
+            </div>
             <div class="inputContainer"><label for="frameMovies">Pasta dedicada a filmes</label><input is="emby-input" id="frameMovies"></div>
-            <div class="inputContainer"><label for="frameSeries">Pasta dedicada a séries (opcional)</label><input is="emby-input" id="frameSeries"></div>
             <div class="inputContainer"><label for="frameHosts">Hosts de mídia permitidos (separados por vírgula)</label><input is="emby-input" id="frameHosts"></div>
             <button is="emby-button" type="submit" class="raised button-submit block">Salvar</button>
         </form>
+
+        <section id="frameSearchSection" hidden>
+            <form id="frameTokenForm" autocomplete="off">
+                <div class="inputContainer">
+                    <label for="frameToken">Token da API</label>
+                    <input is="emby-input" id="frameToken" type="password" autocomplete="new-password" maxlength="8192" spellcheck="false">
+                    <div class="fieldDescription">Cole um token para salvar ou substituir. O campo fica vazio após salvar.</div>
+                </div>
+                <button is="emby-button" type="submit" class="raised">Salvar token</button>
+                <button is="emby-button" id="frameRemoveToken" type="button">Remover token salvo</button>
+                <p id="frameTokenStatus" role="status" aria-live="polite"></p>
+            </form>
+            <h2>Buscar filmes</h2>
+            <form id="frameSearchForm">
+                <div class="inputContainer">
+                    <label for="frameTerm">Título do filme</label>
+                    <input is="emby-input" id="frameTerm" type="search" required minlength="2" maxlength="120">
+                </div>
+                <button is="emby-button" type="submit" class="raised">Buscar</button>
+            </form>
+            <p id="frameStatus" role="status" aria-live="polite"></p>
+            <ul id="frameResults"></ul>
+            <div id="framePagination" hidden>
+                <button is="emby-button" id="framePrev" type="button">Página anterior</button>
+                <span id="framePage"></span>
+                <button is="emby-button" id="frameNext" type="button">Próxima página</button>
+            </div>
+        </section>
     </div>
     <script>
         (() => {
-            const page = document.querySelector('#frameConfig');
+            const root = document.querySelector('#frameConfig');
+            const el = id => root.querySelector('#frame' + id);
             const id = 'bb053bff-fcf8-4e86-b3b6-83b83866063e';
-            const fields = { CatalogUrl: 'frameCatalog', MoviesPath: 'frameMovies', SeriesPath: 'frameSeries', MediaHosts: 'frameHosts' };
-            page.addEventListener('pageshow', async () => {
+            const fields = { CatalogUrl: 'Catalog', MoviesPath: 'Movies', SeriesPath: 'Series', MediaHosts: 'Hosts', BrowseApiUrl: 'BrowseUrl' };
+            let savedMode = false;
+            let currentSearch;
+            let busy = false;
+
+            function updateMode() {
+                const enabled = el('OnDemand').checked;
+                el('BrowseSettings').hidden = !enabled;
+                el('CatalogSettings').hidden = enabled;
+                el('SearchSection').hidden = !enabled || !savedMode;
+            }
+
+            function resetResults() {
+                currentSearch = undefined;
+                el('Status').textContent = '';
+                el('Results').replaceChildren();
+                el('Pagination').hidden = true;
+            }
+
+            async function request(route, options = {}) {
+                const url = ApiClient.getUrl('Frame/Browse/' + route, options.query);
+                const headers = { 'X-Emby-Token': ApiClient.accessToken() };
+                const init = { headers, cache: 'no-store', method: options.method || (options.body ? 'POST' : 'GET') };
+                if (options.body) {
+                    headers['Content-Type'] = 'application/json';
+                    init.body = JSON.stringify(options.body);
+                }
+                const response = await fetch(url, init);
+                const data = await response.json().catch(() => null);
+                if (!response.ok) throw new Error(data?.message || 'Falha ao conectar ao Frame (' + response.status + ').');
+                return data;
+            }
+
+            async function search(term, page) {
+                if (busy) return;
+                busy = true;
+                resetResults();
+                el('Status').textContent = 'Buscando filmes…';
+                try {
+                    const data = await request('Search', { query: { term, page } });
+                    currentSearch = { term, page };
+                    for (const movie of data.items) {
+                        const row = document.createElement('li');
+                        const label = document.createElement('span');
+                        label.textContent = movie.name + (movie.year > 0 ? ' (' + movie.year + ')' : '');
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.textContent = 'Importar';
+                        button.className = 'raised';
+                        button.addEventListener('click', () => importMovie(button, { term, page, externalId: movie.externalId }));
+                        row.append(label, ' ', button);
+                        el('Results').append(row);
+                    }
+                    el('Status').textContent = data.items.length ? '' : 'Nenhum filme nesta página.';
+                    el('Page').textContent = 'Página ' + page;
+                    el('Pagination').hidden = page === 1 && !data.canPageForward;
+                    el('Prev').disabled = page <= 1;
+                    el('Next').disabled = !data.canPageForward;
+                } catch (error) {
+                    el('Status').textContent = error.message;
+                } finally {
+                    busy = false;
+                }
+            }
+
+            async function importMovie(button, selection) {
+                if (busy) return;
+                busy = true;
+                button.disabled = true;
+                el('Status').textContent = 'Importando filme…';
+                try {
+                    const result = await request('Import', { body: selection });
+                    el('Status').textContent = result.message;
+                    button.textContent = 'Importar novamente';
+                } catch (error) {
+                    el('Status').textContent = error.message;
+                } finally {
+                    busy = false;
+                    button.disabled = false;
+                }
+            }
+
+            async function updateToken(method) {
+                const token = el('Token').value.trim();
+                if (method === 'PUT' && !token) {
+                    el('TokenStatus').textContent = 'Informe o token da API.';
+                    return;
+                }
+                try {
+                    const result = await request('Token', { method, body: method === 'PUT' ? { token } : undefined });
+                    el('Token').value = '';
+                    el('TokenStatus').textContent = result.message;
+                } catch (error) {
+                    el('TokenStatus').textContent = error.message;
+                }
+            }
+
+            el('TokenForm').addEventListener('submit', event => {
+                event.preventDefault();
+                updateToken('PUT');
+            });
+            el('RemoveToken').addEventListener('click', () => updateToken('DELETE'));
+            el('OnDemand').addEventListener('change', updateMode);
+            root.addEventListener('pageshow', async () => {
                 Dashboard.showLoadingMsg();
                 try {
                     const config = await ApiClient.getPluginConfiguration(id);
-                    for (const [key, field] of Object.entries(fields)) page.querySelector('#' + field).value = config[key] || '';
+                    for (const [key, field] of Object.entries(fields)) el(field).value = config[key] || '';
+                    el('Token').value = '';
+                    el('TokenStatus').textContent = '';
+                    savedMode = config.OnDemand === true;
+                    el('OnDemand').checked = savedMode;
+                    updateMode();
                 } catch {
                     Dashboard.alert('Falha ao carregar a configuração do Frame.');
                 } finally {
                     Dashboard.hideLoadingMsg();
                 }
             });
-            page.querySelector('form').addEventListener('submit', async event => {
+
+            el('Settings').addEventListener('submit', async event => {
                 event.preventDefault();
                 Dashboard.showLoadingMsg();
                 try {
                     const config = await ApiClient.getPluginConfiguration(id);
-                    for (const [key, field] of Object.entries(fields)) config[key] = page.querySelector('#' + field).value.trim();
+                    for (const [key, field] of Object.entries(fields)) config[key] = el(field).value.trim();
+                    config.OnDemand = el('OnDemand').checked;
                     Dashboard.processPluginConfigurationUpdateResult(await ApiClient.updatePluginConfiguration(id, config));
+                    savedMode = config.OnDemand;
+                    resetResults();
+                    updateMode();
                 } catch {
                     Dashboard.alert('Falha ao salvar a configuração do Frame.');
                 } finally {
                     Dashboard.hideLoadingMsg();
                 }
             });
+
+            el('SearchForm').addEventListener('submit', event => {
+                event.preventDefault();
+                const term = el('Term').value.trim();
+                if (term.length >= 2) search(term, 1);
+            });
+            el('Prev').addEventListener('click', () => currentSearch && search(currentSearch.term, currentSearch.page - 1));
+            el('Next').addEventListener('click', () => currentSearch && search(currentSearch.term, currentSearch.page + 1));
+            updateMode();
         })();
     </script>
 </div>

@@ -7,6 +7,8 @@ namespace Jellyfin.Plugin.Frame;
 
 public sealed class FrameConfiguration : BasePluginConfiguration
 {
+    public bool OnDemand { get; set; }
+    public string BrowseApiUrl { get; set; } = "";
     public string CatalogUrl { get; set; } = "";
     public string MoviesPath { get; set; } = "";
     public string SeriesPath { get; set; } = "";
