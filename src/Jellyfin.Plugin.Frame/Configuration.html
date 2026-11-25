@@ -1,0 +1,45 @@
+<div id="frameConfig" data-role="page" class="page type-interior pluginConfigurationPage">
+    <div data-role="content" class="content-primary">
+        <form>
+            <h2>Frame</h2>
+            <p>Configure o catálogo e execute Frame — Sincronizar catálogo nas tarefas agendadas.</p>
+            <p>Para um catálogo autenticado, configure FRAME_API_TOKEN no ambiente do servidor.</p>
+            <div class="inputContainer"><label for="frameCatalog">URL HTTPS de listagem</label><input is="emby-input" id="frameCatalog" type="url"></div>
+            <div class="inputContainer"><label for="frameMovies">Pasta dedicada a filmes</label><input is="emby-input" id="frameMovies"></div>
+            <div class="inputContainer"><label for="frameSeries">Pasta dedicada a séries (opcional)</label><input is="emby-input" id="frameSeries"></div>
+            <div class="inputContainer"><label for="frameHosts">Hosts de mídia permitidos (separados por vírgula)</label><input is="emby-input" id="frameHosts"></div>
+            <button is="emby-button" type="submit" class="raised button-submit block">Salvar</button>
+        </form>
+    </div>
+    <script>
+        (() => {
+            const page = document.querySelector('#frameConfig');
+            const id = 'bb053bff-fcf8-4e86-b3b6-83b83866063e';
+            const fields = { CatalogUrl: 'frameCatalog', MoviesPath: 'frameMovies', SeriesPath: 'frameSeries', MediaHosts: 'frameHosts' };
+            page.addEventListener('pageshow', async () => {
+                Dashboard.showLoadingMsg();
+                try {
+                    const config = await ApiClient.getPluginConfiguration(id);
+                    for (const [key, field] of Object.entries(fields)) page.querySelector('#' + field).value = config[key] || '';
+                } catch {
+                    Dashboard.alert('Falha ao carregar a configuração do Frame.');
+                } finally {
+                    Dashboard.hideLoadingMsg();
+                }
+            });
+            page.querySelector('form').addEventListener('submit', async event => {
+                event.preventDefault();
+                Dashboard.showLoadingMsg();
+                try {
+                    const config = await ApiClient.getPluginConfiguration(id);
+                    for (const [key, field] of Object.entries(fields)) config[key] = page.querySelector('#' + field).value.trim();
+                    Dashboard.processPluginConfigurationUpdateResult(await ApiClient.updatePluginConfiguration(id, config));
+                } catch {
+                    Dashboard.alert('Falha ao salvar a configuração do Frame.');
+                } finally {
+                    Dashboard.hideLoadingMsg();
+                }
+            });
+        })();
+    </script>
+</div>

@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "id": "5207a7c3-510c-46e2-804d-8efab1083a51",
+      "name": "Frame Teste - Flor",
+      "type": "movie",
+      "description": "Clipe de teste CC0 disponibilizado pela MDN.",
+      "videoUrl": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4"
+    }
+  ],
+  "nextCursor": null
+}
