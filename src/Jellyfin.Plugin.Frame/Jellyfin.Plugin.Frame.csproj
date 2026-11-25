@@ -3,12 +3,13 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.2.1.0</Version>
+    <Version>0.2.2.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Jellyfin.Controller" Version="10.11.0" ExcludeAssets="runtime" />
     <PackageReference Include="Jellyfin.Model" Version="10.11.0" ExcludeAssets="runtime" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <EmbeddedResource Include="Configuration.html" />
+    <EmbeddedResource Include="Frame-icon.png" LogicalName="Jellyfin.Plugin.Frame.Frame-icon.png" />
   </ItemGroup>
 </Project>

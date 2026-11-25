@@ -1,7 +1,40 @@
 <div id="frameConfig" data-role="page" class="page type-interior pluginConfigurationPage">
-    <div data-role="content" class="content-primary">
-        <form id="frameSettings">
+    <style>
+        #frameConfig .frame-content {
+            box-sizing: border-box;
+            max-inline-size: 44rem;
+            margin-inline: auto;
+            padding-inline: clamp(1rem, 3vw, 2rem);
+        }
+
+        #frameConfig .frame-header {
+            display: grid;
+            justify-items: center;
+            gap: .6rem;
+            margin-block: 1rem 2rem;
+            text-align: center;
+        }
+
+        #frameConfig .frame-header h2 {
+            margin: 0;
+        }
+
+        #frameConfig #frameIcon {
+            inline-size: 3.5rem;
+            block-size: 3.5rem;
+            object-fit: contain;
+        }
+
+        #frameConfig #frameSearchSection {
+            margin-block-start: 2rem;
+        }
+    </style>
+    <div data-role="content" class="content-primary frame-content">
+        <header class="frame-header">
+            <img id="frameIcon" width="56" height="56" alt="" hidden>
             <h2>Frame</h2>
+        </header>
+        <form id="frameSettings">
             <div class="checkboxContainer"><label><input is="emby-checkbox" id="frameOnDemand" type="checkbox"><span>Importar filmes sob demanda</span></label></div>
             <div class="inputContainer" id="frameBrowseSettings">
                 <label for="frameBrowseUrl">URL base HTTPS da API FILMES-JR</label>
@@ -61,6 +94,25 @@
                 el('BrowseSettings').hidden = !enabled;
                 el('CatalogSettings').hidden = enabled;
                 el('SearchSection').hidden = !enabled || !savedMode;
+            }
+
+            async function loadIcon() {
+                try {
+                    const response = await fetch(ApiClient.getUrl('Frame/Browse/Icon'), {
+                        headers: { 'X-Emby-Token': ApiClient.accessToken() }
+                    });
+                    if (!response.ok) return;
+                    const image = el('Icon');
+                    const url = URL.createObjectURL(await response.blob());
+                    image.addEventListener('load', () => {
+                        image.hidden = false;
+                        URL.revokeObjectURL(url);
+                    }, { once: true });
+                    image.addEventListener('error', () => URL.revokeObjectURL(url), { once: true });
+                    image.src = url;
+                } catch {
+                    // The settings stay usable if the icon cannot load.
+                }
             }
 
             function resetResults() {
@@ -197,6 +249,7 @@
             el('Prev').addEventListener('click', () => currentSearch && search(currentSearch.term, currentSearch.page - 1));
             el('Next').addEventListener('click', () => currentSearch && search(currentSearch.term, currentSearch.page + 1));
             updateMode();
+            loadIcon();
         })();
     </script>
 </div>

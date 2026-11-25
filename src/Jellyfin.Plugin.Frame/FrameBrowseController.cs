@@ -18,6 +18,13 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
     IApplicationPaths paths, IDataProtectionProvider protection)
     : ControllerBase
 {
+    [HttpGet("Icon")]
+    public IActionResult GetIcon()
+    {
+        var icon = typeof(Plugin).Assembly.GetManifestResourceStream("Jellyfin.Plugin.Frame.Frame-icon.png");
+        return icon is null ? NotFound() : File(icon, "image/png");
+    }
+
     [HttpPut("Token")]
     public async Task<IActionResult> SaveToken([FromBody] FrameTokenRequest request, CancellationToken ct)
     {
