@@ -36,7 +36,7 @@ function Invoke-GitHub([string[]] $Arguments) {
     }
 }
 
-$releaseFields = '.[] | {tag_name,draft,target_commitish} | @json'
+$releaseFields = '.[] | {id,tag_name,draft,target_commitish} | @json'
 for ($attempt = 1; $attempt -le 4; $attempt++) {
     $releases = @(Invoke-GitHub @('api', '--paginate', "repos/$Repository/releases", '--jq', $releaseFields) |
         ForEach-Object { $_ | ConvertFrom-Json })
@@ -60,7 +60,19 @@ for ($attempt = 1; $attempt -le 4; $attempt++) {
             '--title', "Frame $version", '--notes', "Jellyfin.Plugin.Frame $version")
         if (!$created) { continue }
     } elseif (!$remoteTag -and $draft.target_commitish -ne $Commit) {
-        throw "O rascunho $tag aponta para outro commit."
+        $previous = $draft.target_commitish
+        if ($previous -notmatch '^[0-9a-f]{40}$' -or $draft.id -isnot [long] -and $draft.id -isnot [int]) {
+            throw "Não foi possível verificar o commit do rascunho $tag."
+        }
+        git -C $root merge-base --is-ancestor $previous $Commit
+        if ($LASTEXITCODE -ne 0) {
+            throw "O commit do rascunho $tag não está no histórico do commit atual da main."
+        }
+        $updated = Invoke-GitHub @('api', '--method', 'PATCH', "repos/$Repository/releases/$($draft.id)",
+            '-f', "target_commitish=$Commit", '--jq', '.target_commitish')
+        if ($updated -ne $Commit) {
+            throw "O GitHub não confirmou a atualização do rascunho $tag."
+        }
     }
 
     Invoke-GitHub (@('release', 'upload', $tag) + $assets + @('--repo', $Repository, '--clobber')) | Write-Output
