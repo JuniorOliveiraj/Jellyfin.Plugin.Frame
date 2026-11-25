@@ -24,7 +24,7 @@ function Invoke-GitHub([string[]] $Arguments) {
         $output = & gh @Arguments 2>&1
         if ($LASTEXITCODE -eq 0) { return $output }
         $message = $output -join [Environment]::NewLine
-        if ($attempt -eq 4 -or $message -notmatch 'HTTP (429|5\d{2})\b') {
+        if ($attempt -eq 4 -or $message -notmatch 'HTTP (429|5\d{2})\b|stream error:.*(?:CANCEL|REFUSED_STREAM)|connection reset by peer|unexpected EOF|TLS handshake timeout') {
             throw $message
         }
         Write-Warning "GitHub respondeu com erro transitório. Tentativa $attempt de 4."
