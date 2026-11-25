@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace Jellyfin.Plugin.Frame;
 
@@ -11,9 +12,19 @@ internal sealed record BrowsePage(BrowseTitle[] Items);
 internal sealed record BrowseDetail(bool IsSeries, BrowseMovie? Movie);
 internal sealed record BrowseMovie(string ExternalId, string Name, int Year, double? Rating, string? Description,
     string[]? GenreNames, int? DurationMinutes, string? VideoUrl, FrameImages? Images);
-public sealed record FrameSearchResult(string ExternalId, string Name, int Year);
-public sealed record FrameSearchPage(FrameSearchResult[] Items, bool CanPageForward);
-public sealed record FrameImportRequest(string Term, int Page, string ExternalId);
+public sealed record FrameSearchResult(
+    [property: JsonPropertyName("externalId")] string ExternalId,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("year")] int Year);
+
+public sealed record FrameSearchPage(
+    [property: JsonPropertyName("items")] FrameSearchResult[] Items,
+    [property: JsonPropertyName("canPageForward")] bool CanPageForward);
+
+public sealed record FrameImportRequest(
+    [property: JsonPropertyName("term")] string Term,
+    [property: JsonPropertyName("page")] int Page,
+    [property: JsonPropertyName("externalId")] string ExternalId);
 
 internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
 {

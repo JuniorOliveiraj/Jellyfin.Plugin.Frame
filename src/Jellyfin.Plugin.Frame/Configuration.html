@@ -161,6 +161,7 @@
                 el('Status').textContent = 'Buscando filmes…';
                 try {
                     const data = await request('Search', { query: { term, page } });
+                    if (!Array.isArray(data?.items)) throw new Error('O Frame devolveu uma resposta de busca inválida.');
                     currentSearch = { term, page };
                     for (const movie of data.items) {
                         const row = document.createElement('li');

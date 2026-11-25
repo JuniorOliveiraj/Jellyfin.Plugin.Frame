@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Xunit;
 
 namespace Jellyfin.Plugin.Frame.Tests;
@@ -10,6 +11,23 @@ public sealed class BrowseClientTests
         {"items":[{"externalId":"123","name":"Filme","year":2024,"isSeries":false},
         {"externalId":"456","name":"Série","year":2024,"isSeries":true}],"page":2,"pageSize":2,"totalCount":2}
         """;
+
+    [Fact]
+    public void SearchAndImportUseThePanelJsonContractWithoutACamelCasePolicy()
+    {
+        var payload = new FrameSearchPage([new("123", "Oppenheimer", 2023)], true);
+        using var response = JsonDocument.Parse(JsonSerializer.Serialize(payload));
+        var film = response.RootElement.GetProperty("items")[0];
+        Assert.Equal("123", film.GetProperty("externalId").GetString());
+        Assert.Equal("Oppenheimer", film.GetProperty("name").GetString());
+        Assert.Equal(2023, film.GetProperty("year").GetInt32());
+        Assert.True(response.RootElement.GetProperty("canPageForward").GetBoolean());
+
+        var request = JsonSerializer.Deserialize<FrameImportRequest>(
+            """{"term":"oppenheimer","page":1,"externalId":"123"}""");
+        Assert.Equal(new FrameImportRequest("oppenheimer", 1, "123"), request);
+    }
+
 
     [Fact]
     public async Task SearchesOnePageAndOnlyReturnsMovies()
