@@ -47,6 +47,5 @@ jobs:
           path: artifacts/release
       - shell: pwsh
         env:
-          GODEBUG: http2client=0
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/Publish-Release.ps1 -Repository $env:GITHUB_REPOSITORY -Commit $env:GITHUB_SHA

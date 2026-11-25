@@ -1,82 +1,184 @@
 param(
     [Parameter(Mandatory)]
+    [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
     [string] $Repository,
 
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-f]{40}$')]
-    [string] $Commit
+    [string] $Commit,
+
+    [string] $ReleaseDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts/release')
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$release = Join-Path $root 'artifacts/release'
-$manifestPath = Join-Path $release 'manifest.json'
-$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -NoEnumerate
-$version = [version] $manifest[0].versions[0].version
-$tag = "v$version"
-$zip = Join-Path $release "Jellyfin.Plugin.Frame-$version.zip"
-$assets = @($zip, "$zip.sha256", $manifestPath)
-foreach ($asset in $assets) {
-    if (!(Test-Path -LiteralPath $asset -PathType Leaf)) { throw "Arquivo ausente: $asset" }
+if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'GH_TOKEN não configurado.' }
+$headers = @{
+    Authorization = "Bearer $env:GH_TOKEN"
+    Accept = 'application/vnd.github+json'
+    'X-GitHub-Api-Version' = '2022-11-28'
 }
-
-function Invoke-GitHub([string[]] $Arguments) {
-    for ($attempt = 1; $attempt -le 4; $attempt++) {
-        $output = & gh @Arguments 2>&1
-        if ($LASTEXITCODE -eq 0) { return $output }
-        $message = $output -join [Environment]::NewLine
-        if ($attempt -eq 4 -or $message -notmatch 'HTTP (429|5\d{2})\b|stream error:.*(?:CANCEL|REFUSED_STREAM)|connection reset by peer|unexpected EOF|TLS handshake timeout') {
-            throw $message
-        }
-        Write-Warning "GitHub respondeu com erro transitório. Tentativa $attempt de 4."
-        Start-Sleep -Seconds ([math]::Pow(2, $attempt))
-        if ($Arguments[0] -eq 'release' -and $Arguments[1] -eq 'create') {
-            # The create may have succeeded remotely. Let the caller inspect the release before retrying.
-            return $null
-        }
+$api = "https://api.github.com/repos/$Repository"
+$uploads = "https://uploads.github.com/repos/$Repository"
+$manifestPath = Join-Path $ReleaseDirectory 'manifest.json'
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -NoEnumerate
+$entry = $manifest[0].versions[0]
+$version = [version] $entry.version
+$tag = "v$version"
+$zipName = "Jellyfin.Plugin.Frame-$version.zip"
+$zip = Join-Path $ReleaseDirectory $zipName
+$shaFile = "$zip.sha256"
+$expectedUrl = "https://github.com/$Repository/releases/download/$tag/$zipName"
+if ($entry.sourceUrl -cne $expectedUrl -or $entry.checksum -ine (Get-FileHash -LiteralPath $zip -Algorithm MD5).Hash) {
+    throw 'O manifesto não corresponde ao ZIP desta release.'
+}
+$sha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ((Get-Content -LiteralPath $shaFile -Raw).Trim() -cne "$sha256  $zipName") {
+    throw 'O arquivo SHA-256 não corresponde ao ZIP desta release.'
+}
+$files = foreach ($path in @($zip, $shaFile, $manifestPath)) {
+    $file = Get-Item -LiteralPath $path
+    [pscustomobject] @{
+        Name = $file.Name
+        Path = $file.FullName
+        Size = $file.Length
+        Digest = 'sha256:' + (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 }
 
-$releaseFields = '.[] | {id,tag_name,draft,target_commitish} | @json'
+function Stop-Transient([string] $Message) {
+    $failure = [InvalidOperationException]::new($Message)
+    $failure.Data['GitHubTransient'] = $true
+    throw $failure
+}
+
+function Invoke-GitHub {
+    param(
+        [string] $Operation,
+        [string] $Method,
+        [string] $Uri,
+        [hashtable] $Body,
+        [string] $File,
+        [switch] $AllowMissing,
+        [switch] $NoContent
+    )
+    $request = @{
+        Uri = $Uri; Method = $Method; Headers = $headers; TimeoutSec = 45
+        HttpVersion = '1.1'; MaximumRedirection = 0; SkipHttpErrorCheck = $true
+    }
+    if ($Body) {
+        $request.ContentType = 'application/json'
+        $request.Body = ConvertTo-Json -InputObject $Body -Compress
+    }
+    if ($File) {
+        $request.ContentType = 'application/octet-stream'
+        $request.InFile = $File
+    }
+    try {
+        $response = Invoke-WebRequest @request
+    }
+    catch [System.Net.Http.HttpRequestException], [System.OperationCanceledException], [System.IO.IOException] {
+        Stop-Transient "$Operation falhou na conexão ($($_.Exception.GetType().Name))."
+    }
+
+    $status = [int] $response.StatusCode
+    if ($status -eq 404 -and $AllowMissing) { return }
+    if ($status -eq 429 -or $status -ge 500) {
+        Stop-Transient "$Operation recebeu HTTP $status."
+    }
+    if ($status -lt 200 -or $status -ge 300) {
+        $detail = $null
+        try { $detail = ($response.Content | ConvertFrom-Json -ErrorAction Stop).message } catch {}
+        throw "$Operation recebeu HTTP $status. $detail"
+    }
+    if ($NoContent) { return }
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($response.Content)) { throw 'Resposta vazia.' }
+        ConvertFrom-Json -InputObject $response.Content -NoEnumerate
+    }
+    catch {
+        Stop-Transient "$Operation recebeu uma resposta JSON incompleta ou inválida (HTTP $status)."
+    }
+}
+
+function Get-GitHubPages([string] $Operation, [string] $Uri) {
+    for ($page = 1; ; $page++) {
+        $items = Invoke-GitHub $Operation GET "$($Uri)?per_page=100&page=$page"
+        if ($items -isnot [array]) { Stop-Transient "$Operation recebeu uma lista inválida." }
+        $items
+        if ($items.Count -lt 100) { return }
+    }
+}
+
+function Test-ReleaseAsset($Asset, $File) {
+    return $Asset.state -eq 'uploaded' -and $Asset.size -eq $File.Size -and
+        (!$Asset.digest -or $Asset.digest -ieq $File.Digest)
+}
+
 for ($attempt = 1; $attempt -le 4; $attempt++) {
-    $releases = @(Invoke-GitHub @('api', '--paginate', "repos/$Repository/releases", '--jq', $releaseFields) |
-        ForEach-Object { $_ | ConvertFrom-Json })
-    foreach ($published in $releases) {
-        if (!$published.draft -and $published.tag_name -match '^v(\d+\.\d+\.\d+\.\d+)$' -and
-            [version] $Matches[1] -ge $version) {
+    try {
+        $releases = @(Get-GitHubPages 'Listar releases' "$api/releases")
+        $published = $releases | Where-Object {
+            !$_.draft -and $_.tag_name -match '^v(\d+\.\d+\.\d+\.\d+)$' -and [version] $Matches[1] -ge $version
+        } | Select-Object -First 1
+        if ($published) {
             Write-Output "A versão $($published.tag_name) já está publicada. Nenhuma release criada."
             return
         }
-    }
 
-    $tagFilter = '.[] | select(.ref == "refs/tags/' + $tag + '") | .object.sha'
-    $remoteTag = Invoke-GitHub @('api', '--paginate', "repos/$Repository/git/matching-refs/tags/$tag", '--jq', $tagFilter)
-    if ($remoteTag -and $remoteTag -ne $Commit) {
-        throw "A tag $tag já existe e aponta para outro commit."
-    }
+        $remoteTag = Invoke-GitHub 'Consultar tag' GET "$api/git/ref/tags/$tag" -AllowMissing
+        if ($remoteTag -and ($remoteTag.object.type -ne 'commit' -or $remoteTag.object.sha -ne $Commit)) {
+            throw "A tag $tag já existe e aponta para outro commit."
+        }
 
-    $draft = $releases | Where-Object { $_.draft -and $_.tag_name -eq $tag } | Select-Object -First 1
-    if (!$draft) {
-        $created = Invoke-GitHub @('release', 'create', $tag, '--draft', '--repo', $Repository, '--target', $Commit,
-            '--title', "Frame $version", '--notes', "Jellyfin.Plugin.Frame $version")
-        if (!$created) { continue }
-    } elseif (!$remoteTag -and $draft.target_commitish -ne $Commit) {
-        $previous = $draft.target_commitish
-        if ($previous -notmatch '^[0-9a-f]{40}$' -or $draft.id -isnot [long] -and $draft.id -isnot [int]) {
-            throw "Não foi possível verificar o commit do rascunho $tag."
+        $draft = $releases | Where-Object { $_.draft -and $_.tag_name -eq $tag } | Select-Object -First 1
+        if (!$draft) {
+            Write-Output "Criando rascunho $tag."
+            $draft = Invoke-GitHub 'Criar rascunho' POST "$api/releases" -Body @{
+                tag_name = $tag; target_commitish = $Commit; draft = $true
+                name = "Frame $version"; body = "Jellyfin.Plugin.Frame $version"
+            }
         }
-        git -C $root merge-base --is-ancestor $previous $Commit
-        if ($LASTEXITCODE -ne 0) {
-            throw "O commit do rascunho $tag não está no histórico do commit atual da main."
+        elseif (!$remoteTag -and $draft.target_commitish -ne $Commit) {
+            $previous = $draft.target_commitish
+            if ($previous -notmatch '^[0-9a-f]{40}$') { throw "O commit do rascunho $tag é inválido." }
+            git -C $root merge-base --is-ancestor $previous $Commit
+            if ($LASTEXITCODE -ne 0) { throw "O commit do rascunho $tag não está no histórico da main." }
+            Write-Output "Retomando o rascunho $tag criado em um commit anterior da main."
         }
-        $updated = Invoke-GitHub @('api', '--method', 'PATCH', "repos/$Repository/releases/$($draft.id)",
-            '-f', "target_commitish=$Commit", '--jq', '.target_commitish')
-        if ($updated -ne $Commit) {
-            throw "O GitHub não confirmou a atualização do rascunho $tag."
+        if (!$draft.draft -or $draft.tag_name -ne $tag -or $draft.id -notmatch '^[1-9]\d*$') {
+            Stop-Transient "O GitHub não retornou um rascunho válido para $tag."
         }
-    }
 
-    Invoke-GitHub (@('release', 'upload', $tag) + $assets + @('--repo', $Repository, '--clobber')) | Write-Output
-    Invoke-GitHub @('release', 'edit', $tag, '--repo', $Repository, '--draft=false', '--latest') | Write-Output
-    return
+        $draftApi = "$api/releases/$($draft.id)"
+        $draftAssets = @(Get-GitHubPages 'Listar arquivos do rascunho' "$draftApi/assets")
+        foreach ($file in $files) {
+            $asset = $draftAssets | Where-Object name -CEQ $file.Name | Select-Object -First 1
+            if ($asset -and (Test-ReleaseAsset $asset $file)) { continue }
+            if ($asset) {
+                Invoke-GitHub "Remover upload parcial $($file.Name)" DELETE "$api/releases/assets/$($asset.id)" -NoContent -AllowMissing
+            }
+            Write-Output "Enviando $($file.Name)."
+            $name = [Uri]::EscapeDataString($file.Name)
+            $uploaded = Invoke-GitHub "Enviar $($file.Name)" POST "$uploads/releases/$($draft.id)/assets?name=$name" -File $file.Path
+            if (!(Test-ReleaseAsset $uploaded $file)) {
+                Stop-Transient "O GitHub não confirmou o upload de $($file.Name)."
+            }
+        }
+
+        Write-Output "Publicando $tag."
+        $published = Invoke-GitHub 'Publicar rascunho' PATCH $draftApi -Body @{
+            draft = $false; target_commitish = $Commit; make_latest = 'true'
+        }
+        if ($published.draft -ne $false -or $published.tag_name -ne $tag) {
+            Stop-Transient "O GitHub não confirmou a publicação de $tag."
+        }
+        Write-Output "Release $tag publicada."
+        return
+    }
+    catch {
+        if (!$_.Exception.Data['GitHubTransient'] -or $attempt -eq 4) { throw }
+        Write-Warning "$($_.Exception.Message) Retomando a partir do estado no GitHub ($attempt de 4)."
+        Start-Sleep -Seconds ([int] [math]::Pow(2, $attempt))
+    }
 }
-throw "O GitHub não confirmou a criação de $tag após quatro tentativas."
