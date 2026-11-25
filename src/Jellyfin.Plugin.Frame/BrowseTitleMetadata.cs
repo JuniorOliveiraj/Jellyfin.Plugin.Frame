@@ -2,25 +2,25 @@ using System.Globalization;
 
 namespace Jellyfin.Plugin.Frame;
 
-internal sealed record BrowseMovieMetadata(int Id, string? OriginalName, string? Overview, string? PosterPath,
+internal sealed record BrowseTitleMetadata(int Id, string? OriginalName, string? Overview, string? PosterPath,
     string? BackdropPath, string? ReleaseDate, double? VoteAverage, int? RuntimeMinutes,
     string[]? Genres, string[]? Directors, FrameCastMember[]? Cast)
 {
     internal const string ArtworkHost = "image.tmdb.org";
 
-    internal FrameItem ApplyTo(FrameItem movie)
+    internal FrameItem ApplyTo(FrameItem item)
     {
         var date = DateOnly.TryParseExact(ReleaseDate, "yyyy-MM-dd", CultureInfo.InvariantCulture,
             DateTimeStyles.None, out var parsed) ? parsed : (DateOnly?)null;
-        return movie with
+        return item with
         {
-            Description = string.IsNullOrWhiteSpace(movie.Description) ? Overview : movie.Description,
-            Year = movie.Year ?? date?.Year,
-            Rating = movie.Rating ?? VoteAverage,
-            DurationMinutes = movie.DurationMinutes is > 0 ? movie.DurationMinutes :
-                RuntimeMinutes is > 0 ? RuntimeMinutes : movie.DurationMinutes,
-            Genres = movie.Genres is { Length: > 0 } ? movie.Genres : Genres,
-            MovieMetadata = new(Id, OriginalName, date, Directors, Cast)
+            Description = string.IsNullOrWhiteSpace(item.Description) ? Overview : item.Description,
+            Year = item.Year ?? date?.Year,
+            Rating = item.Rating ?? VoteAverage,
+            DurationMinutes = item.DurationMinutes is > 0 ? item.DurationMinutes :
+                RuntimeMinutes is > 0 ? RuntimeMinutes : item.DurationMinutes,
+            Genres = item.Genres is { Length: > 0 } ? item.Genres : Genres,
+            TitleMetadata = new(Id, OriginalName, date, Directors, Cast)
         };
     }
 

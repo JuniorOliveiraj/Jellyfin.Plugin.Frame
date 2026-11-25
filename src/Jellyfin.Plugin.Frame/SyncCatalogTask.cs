@@ -130,7 +130,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             nfo.Add(item.Year is int year ? new XElement("year", year) : null,
                 item.Rating is double rating ? new XElement("rating", rating) : null,
                 (item.Genres ?? []).Select(genre => new XElement("genre", genre)));
-            AddMovieMetadata(nfo, item.MovieMetadata);
+            AddTitleMetadata(nfo, item.TitleMetadata);
             var url = PlaybackUrl(item.VideoUrl, hosts);
             var folder = OpenFolder(config.MoviesPath, "Frame-" + item.Id);
             await Write(folder, "movie.nfo", nfo.ToString(), cancellationToken);
@@ -144,6 +144,10 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             return;
 
         var show = Metadata("tvshow", item.Id, item.Name, item.Description, null);
+        show.Add(item.Year is int startYear ? new XElement("year", startYear) : null,
+            item.Rating is double showRating ? new XElement("rating", showRating) : null,
+            (item.Genres ?? []).Select(genre => new XElement("genre", genre)));
+        AddTitleMetadata(show, item.TitleMetadata);
         var seasons = item.Seasons ?? throw new InvalidDataException("Temporadas ausentes.");
         var episodes = new List<(int Season, string Name, string Url, XElement Nfo)>();
         var episodeIds = new HashSet<Guid>();
@@ -159,7 +163,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
                     throw new InvalidDataException("Episódio inválido ou repetido.");
                 var nfo = Metadata("episodedetails", episode.Id, episode.Name, episode.Description, episode.DurationMinutes);
                 nfo.Add(new XElement("season", season.Number), new XElement("episode", episode.Number));
-                episodes.Add((season.Number, $"S{season.Number:D2}E{episode.Number:D2}",
+                episodes.Add((season.Number, EpisodeFileName(season.Number, episode.Number),
                     PlaybackUrl(episode.VideoUrl, hosts), nfo));
             }
         }
@@ -167,12 +171,16 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         await Write(series, "tvshow.nfo", show.ToString(), cancellationToken);
         foreach (var episode in episodes)
         {
-            var folder = OpenFolder(series, $"Season {episode.Season:D2}");
+            var folder = OpenFolder(series, SeasonFolderName(episode.Season));
             await Write(folder, episode.Name + ".nfo", episode.Nfo.ToString(), cancellationToken);
             await Write(folder, episode.Name + ".strm", episode.Url, cancellationToken);
         }
         await ImportArtwork(series, item.Images, hosts, cancellationToken);
     }
+
+    internal static string EpisodeFileName(int season, int episode) => FormattableString.Invariant($"S{season:D2}E{episode:D2}");
+
+    internal static string SeasonFolderName(int season) => FormattableString.Invariant($"Season {season:D2}");
 
     internal static async Task<bool> ImportArtwork(string folder, FrameImages? images, HashSet<string> hosts,
         CancellationToken cancellationToken, FrameImages? fallback = null, HttpClient? imageClient = null)
@@ -223,7 +231,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         return posterSaved;
     }
 
-    private static void AddMovieMetadata(XElement nfo, FrameMovieMetadata? metadata)
+    private static void AddTitleMetadata(XElement nfo, FrameTitleMetadata? metadata)
     {
         if (metadata is null)
             return;

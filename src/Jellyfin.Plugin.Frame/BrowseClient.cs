@@ -9,13 +9,19 @@ namespace Jellyfin.Plugin.Frame;
 
 internal sealed record BrowseTitle(string ExternalId, string Name, int Year, bool IsSeries);
 internal sealed record BrowsePage(BrowseTitle[] Items);
-internal sealed record BrowseDetail(bool IsSeries, BrowseMovie? Movie);
+internal sealed record BrowseDetail(bool IsSeries, BrowseMovie? Movie, BrowseSeries? Series);
 internal sealed record BrowseMovie(string ExternalId, string Name, int Year, double? Rating, string? Description,
     string[]? GenreNames, int? DurationMinutes, string? VideoUrl, FrameImages? Images);
+internal sealed record BrowseSeries(string ExternalId, string Name, int Year, double? Rating, string? Description,
+    string[]? GenreNames, FrameImages? Images, BrowseSeason[]? Seasons);
+internal sealed record BrowseSeason(int Number, BrowseEpisode[]? Episodes);
+internal sealed record BrowseEpisode(int Number, string? Name, string? VideoUrl, int? DurationMinutes);
+
 public sealed record FrameSearchResult(
     [property: JsonPropertyName("externalId")] string ExternalId,
     [property: JsonPropertyName("name")] string Name,
-    [property: JsonPropertyName("year")] int Year);
+    [property: JsonPropertyName("year")] int Year,
+    [property: JsonPropertyName("isSeries")] bool IsSeries = false);
 
 public sealed record FrameSearchPage(
     [property: JsonPropertyName("items")] FrameSearchResult[] Items,
@@ -24,7 +30,8 @@ public sealed record FrameSearchPage(
 public sealed record FrameImportRequest(
     [property: JsonPropertyName("term")] string Term,
     [property: JsonPropertyName("page")] int Page,
-    [property: JsonPropertyName("externalId")] string ExternalId);
+    [property: JsonPropertyName("externalId")] string ExternalId,
+    [property: JsonPropertyName("isSeries")] bool? IsSeries = null);
 
 internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
 {
@@ -37,41 +44,78 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
     internal async Task<FrameSearchPage> Search(string term, int page, CancellationToken ct)
     {
         var result = await ReadSearch(term, page, ct);
-        var films = result.Items
-            .Where(item => item is { IsSeries: false } && IsValidId(item.ExternalId) && !string.IsNullOrWhiteSpace(item.Name))
-            .DistinctBy(item => item.ExternalId)
-            .Select(item => new FrameSearchResult(item.ExternalId, item.Name, item.Year))
+        var titles = result.Items
+            .Where(item => item is not null && IsValidId(item.ExternalId) && !string.IsNullOrWhiteSpace(item.Name))
+            .DistinctBy(item => (item.ExternalId, item.IsSeries))
+            .Select(item => new FrameSearchResult(item.ExternalId, item.Name, item.Year, item.IsSeries))
             .ToArray();
 
         // The upstream search counts only the current page. An empty raw page ends pagination.
-        return new(films, result.Items.Length > 0 && page < 100);
+        return new(titles, result.Items.Length > 0 && page < 100);
     }
 
-    internal async Task<FrameItem?> GetMovie(FrameImportRequest selection, CancellationToken ct)
+    internal async Task<FrameItem?> GetTitleForImport(FrameImportRequest selection, CancellationToken ct)
     {
         var path = "browse/titles/" + Uri.EscapeDataString(selection.ExternalId);
         var detail = await Read<BrowseDetail>(path, ct, allowMissing: true);
         if (detail is null)
         {
             var result = await ReadSearch(selection.Term, selection.Page, ct);
-            if (!result.Items.Any(item => item is { IsSeries: false } && item.ExternalId == selection.ExternalId))
+            if (!result.Items.Any(item => item is not null && item.ExternalId == selection.ExternalId &&
+                (selection.IsSeries is null || item.IsSeries == selection.IsSeries)))
                 return null;
             detail = await Read<BrowseDetail>(path, ct, allowMissing: true);
         }
 
+        if (detail is null || selection.IsSeries is bool expectedSeries && detail.IsSeries != expectedSeries)
+            return null;
+
+        if (detail is { IsSeries: true, Series: { } series } && series.ExternalId == selection.ExternalId)
+            return MapSeries(series);
         if (detail is not { IsSeries: false, Movie: { } movie } || movie.ExternalId != selection.ExternalId)
             return null;
 
-        var digest = SHA256.HashData(Encoding.UTF8.GetBytes("filmes-jr:movie:" + movie.ExternalId));
-        digest[6] = (byte)((digest[6] & 0x0f) | 0x80);
-        digest[8] = (byte)((digest[8] & 0x3f) | 0x80);
-        return new(new Guid(digest.AsSpan(0, 16), bigEndian: true), movie.Name, "movie",
+        return new(StableId("movie:" + movie.ExternalId), movie.Name, "movie",
             movie.Year > 0 ? movie.Year : null, movie.Rating, movie.Description, movie.GenreNames,
             movie.DurationMinutes, movie.VideoUrl, movie.Images, null);
     }
 
-    internal Task<BrowseMovieMetadata?> GetMovieMetadata(string externalId, CancellationToken ct) =>
-        Read<BrowseMovieMetadata>("browse/titles/" + Uri.EscapeDataString(externalId) + "/metadata", ct,
+    private static FrameItem MapSeries(BrowseSeries series)
+    {
+        // The trial imports the earliest episode with a playback URL, preferring regular seasons.
+        var selected = (series.Seasons ?? [])
+            .Where(season => season is { Number: >= 0 })
+            .OrderBy(season => season.Number == 0)
+            .ThenBy(season => season.Number)
+            .SelectMany(season => (season.Episodes ?? [])
+                .Where(episode => episode is { Number: > 0 } && !string.IsNullOrWhiteSpace(episode.VideoUrl))
+                .OrderBy(episode => episode.Number)
+                .Select(episode => (Season: season.Number, Episode: episode)))
+            .FirstOrDefault();
+
+        FrameSeason[] seasons = [];
+        if (selected.Episode is { } selectedEpisode)
+        {
+            var key = FormattableString.Invariant($"episode:{series.ExternalId}:{selected.Season}:{selectedEpisode.Number}");
+            var name = string.IsNullOrWhiteSpace(selectedEpisode.Name) ? $"Episódio {selectedEpisode.Number}" : selectedEpisode.Name;
+            seasons = [new(selected.Season,
+                [new(StableId(key), selectedEpisode.Number, name, null, selectedEpisode.DurationMinutes, selectedEpisode.VideoUrl)])];
+        }
+        return new(StableId("series:" + series.ExternalId), series.Name, "series",
+            series.Year > 0 ? series.Year : null, series.Rating, series.Description, series.GenreNames,
+            null, null, series.Images, seasons);
+    }
+
+    private static Guid StableId(string key)
+    {
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes("filmes-jr:" + key));
+        digest[6] = (byte)((digest[6] & 0x0f) | 0x80);
+        digest[8] = (byte)((digest[8] & 0x3f) | 0x80);
+        return new Guid(digest.AsSpan(0, 16), bigEndian: true);
+    }
+
+    internal Task<BrowseTitleMetadata?> GetTitleMetadata(string externalId, CancellationToken ct) =>
+        Read<BrowseTitleMetadata>("browse/titles/" + Uri.EscapeDataString(externalId) + "/metadata", ct,
             allowMissing: true);
 
     internal static bool IsValidId(string? id) => id is { Length: > 0 and <= 128 } &&

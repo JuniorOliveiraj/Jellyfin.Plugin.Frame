@@ -20,7 +20,7 @@ public sealed class MovieMetadataTests
             null, "https://media.example.org/test.mp4", new(null, null, null, fallbackPoster), null);
         var config = new FrameConfiguration { MoviesPath = root };
         var allowed = SyncCatalogTask.ReadMediaAllowlist("media.example.org");
-        var artHosts = new HashSet<string>(allowed, allowed.Comparer) { BrowseMovieMetadata.ArtworkHost };
+        var artHosts = new HashSet<string>(allowed, allowed.Comparer) { BrowseTitleMetadata.ArtworkHost };
         var imageRequests = new List<string>();
         var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nX0AAAAASUVORK5CYII=");
         using var api = new HttpClient(new FakeHttp(request =>
@@ -54,8 +54,8 @@ public sealed class MovieMetadataTests
             await SyncCatalogTask.Materialize(movie with { Images = null }, config, allowed, default);
             var folder = Assert.Single(Directory.GetDirectories(root));
             var originalStrm = await File.ReadAllTextAsync(Path.Combine(folder, "movie.strm"));
-            var metadata = Assert.IsType<BrowseMovieMetadata>(await new BrowseClient(api, new Uri(baseUrl), "test-token")
-                .GetMovieMetadata("123", default));
+            var metadata = Assert.IsType<BrowseTitleMetadata>(await new BrowseClient(api, new Uri(baseUrl), "test-token")
+                .GetTitleMetadata("123", default));
             var updated = metadata.ApplyTo(movie);
             await SyncCatalogTask.Materialize(updated with { Images = null }, config, allowed, default);
             Assert.True(await SyncCatalogTask.ImportArtwork(folder, metadata.Artwork(), artHosts, default, updated.Images, images));
@@ -91,7 +91,7 @@ public sealed class MovieMetadataTests
     {
         using var http = new HttpClient(new FakeHttp(_ => new(status)));
         Assert.Null(await new BrowseClient(http, new Uri("https://frame.example/"), "test")
-            .GetMovieMetadata("123", default));
+            .GetTitleMetadata("123", default));
     }
 
     private sealed class FakeHttp(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

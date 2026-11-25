@@ -35,7 +35,7 @@
             <h2>Frame</h2>
         </header>
         <form id="frameSettings">
-            <div class="checkboxContainer"><label><input is="emby-checkbox" id="frameOnDemand" type="checkbox"><span>Importar filmes sob demanda</span></label></div>
+            <div class="checkboxContainer"><label><input is="emby-checkbox" id="frameOnDemand" type="checkbox"><span>Importar filmes e séries sob demanda</span></label></div>
             <div class="inputContainer" id="frameBrowseSettings">
                 <label for="frameBrowseUrl">URL base HTTPS da API FILMES-JR</label>
                 <input is="emby-input" id="frameBrowseUrl" type="url">
@@ -43,10 +43,10 @@
             </div>
             <div id="frameCatalogSettings">
                 <div class="inputContainer"><label for="frameCatalog">URL HTTPS de listagem</label><input is="emby-input" id="frameCatalog" type="url"></div>
-                <div class="inputContainer"><label for="frameSeries">Pasta dedicada a séries (opcional)</label><input is="emby-input" id="frameSeries"></div>
                 <p>Execute Frame — Sincronizar catálogo nas tarefas agendadas.</p>
             </div>
             <div class="inputContainer"><label for="frameMovies">Pasta dedicada a filmes</label><input is="emby-input" id="frameMovies"></div>
+            <div class="inputContainer"><label for="frameSeries">Pasta dedicada a séries (opcional)</label><input is="emby-input" id="frameSeries"></div>
             <div class="inputContainer"><label for="frameHosts">Hosts de mídia permitidos (separados por vírgula)</label><input is="emby-input" id="frameHosts">
                 <div class="fieldDescription">Para HTTPS, informe só o domínio. Para autorizar vídeo HTTP, informe a origem completa com a porta, se houver, como http://midia.exemplo:8080.</div>
             </div>
@@ -81,10 +81,10 @@
                     <p id="frameTokenStatus" role="status" aria-live="polite"></p>
                 </form>
             </details>
-            <h2>Buscar filmes</h2>
+            <h2>Buscar filmes e séries</h2>
             <form id="frameSearchForm">
                 <div class="inputContainer">
-                    <label for="frameTerm">Título do filme</label>
+                    <label for="frameTerm">Título do filme ou série</label>
                     <input is="emby-input" id="frameTerm" type="search" required minlength="2" maxlength="120">
                 </div>
                 <button is="emby-button" type="submit" class="raised">Buscar</button>
@@ -160,24 +160,24 @@
                 if (busy) return;
                 busy = true;
                 resetResults();
-                el('Status').textContent = 'Buscando filmes…';
+                el('Status').textContent = 'Buscando filmes e séries…';
                 try {
                     const data = await request('Search', { query: { term, page } });
                     if (!Array.isArray(data?.items)) throw new Error('O Frame devolveu uma resposta de busca inválida.');
                     currentSearch = { term, page };
-                    for (const movie of data.items) {
+                    for (const item of data.items) {
                         const row = document.createElement('li');
                         const label = document.createElement('span');
-                        label.textContent = movie.name + (movie.year > 0 ? ' (' + movie.year + ')' : '');
+                        label.textContent = item.name + (item.year > 0 ? ' (' + item.year + ')' : '') + (item.isSeries ? ' · Série' : ' · Filme');
                         const button = document.createElement('button');
                         button.type = 'button';
-                        button.textContent = 'Importar';
+                        button.textContent = item.isSeries ? 'Importar primeiro episódio' : 'Importar';
                         button.className = 'raised';
-                        button.addEventListener('click', () => importMovie(button, { term, page, externalId: movie.externalId }));
+                        button.addEventListener('click', () => importTitle(button, { term, page, externalId: item.externalId, isSeries: item.isSeries }));
                         row.append(label, ' ', button);
                         el('Results').append(row);
                     }
-                    el('Status').textContent = data.items.length ? '' : 'Nenhum filme nesta página.';
+                    el('Status').textContent = data.items.length ? '' : 'Nenhum título nesta página.';
                     el('Page').textContent = 'Página ' + page;
                     el('Pagination').hidden = page === 1 && !data.canPageForward;
                     el('Prev').disabled = page <= 1;
@@ -189,11 +189,11 @@
                 }
             }
 
-            async function importMovie(button, selection) {
+            async function importTitle(button, selection) {
                 if (busy) return;
                 busy = true;
                 button.disabled = true;
-                el('Status').textContent = 'Importando filme…';
+                el('Status').textContent = selection.isSeries ? 'Importando o primeiro episódio…' : 'Importando filme…';
                 try {
                     const result = await request('Import', { body: selection });
                     el('Status').textContent = result.message;

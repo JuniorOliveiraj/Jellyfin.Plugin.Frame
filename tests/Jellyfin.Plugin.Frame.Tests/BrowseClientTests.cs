@@ -21,6 +21,7 @@ public sealed class BrowseClientTests
         Assert.Equal("123", film.GetProperty("externalId").GetString());
         Assert.Equal("Oppenheimer", film.GetProperty("name").GetString());
         Assert.Equal(2023, film.GetProperty("year").GetInt32());
+        Assert.False(film.GetProperty("isSeries").GetBoolean());
         Assert.True(response.RootElement.GetProperty("canPageForward").GetBoolean());
 
         var request = JsonSerializer.Deserialize<FrameImportRequest>(
@@ -30,7 +31,7 @@ public sealed class BrowseClientTests
 
 
     [Fact]
-    public async Task SearchesOnePageAndOnlyReturnsMovies()
+    public async Task SearchesOnePageAndReturnsMoviesAndSeries()
     {
         using var handler = new FakeApi((request, _) =>
         {
@@ -42,7 +43,9 @@ public sealed class BrowseClientTests
         using var http = new HttpClient(handler);
         var page = await new BrowseClient(http, new Uri("https://example.org/api/"), "test-token")
             .Search("Filme & Ação", 2, default);
-        Assert.Equal("123", Assert.Single(page.Items).ExternalId);
+        Assert.Collection(page.Items,
+            film => { Assert.Equal("123", film.ExternalId); Assert.False(film.IsSeries); },
+            series => { Assert.Equal("456", series.ExternalId); Assert.True(series.IsSeries); });
         Assert.True(page.CanPageForward);
     }
 
@@ -68,13 +71,71 @@ public sealed class BrowseClientTests
         using var http = new HttpClient(handler);
         var client = new BrowseClient(http, new Uri("https://example.org/"), null);
         var selected = new FrameImportRequest("Filme", 2, "123");
-        var movie = Assert.IsType<FrameItem>(await client.GetMovie(selected, default));
+        var movie = Assert.IsType<FrameItem>(await client.GetTitleForImport(selected, default));
         Assert.Equal("Ação", Assert.Single(movie.Genres!));
         Assert.Equal("https://media.example.org/test.mp4", movie.VideoUrl);
-        Assert.Equal(movie.Id, (await client.GetMovie(selected, default))?.Id);
+        Assert.Equal(movie.Id, (await client.GetTitleForImport(selected, default))?.Id);
         Assert.Equal(4, handler.Calls);
     }
 
+    [Fact]
+    public async Task ImportsOnlyTheFirstAvailableRegularEpisodeFromSeriesDetail()
+    {
+        using var handler = new FakeApi((request, _) =>
+        {
+            Assert.Equal("/browse/titles/456", request.RequestUri!.AbsolutePath);
+            return Json("""
+                {"isSeries":true,"series":{"externalId":"456","name":"Série de teste","year":2024,
+                 "seasons":[
+                   {"number":2,"episodes":[{"number":1,"name":"Outra temporada","videoUrl":"https://media.example.org/201.mp4"}]},
+                   {"number":0,"episodes":[{"number":1,"name":"Especial","videoUrl":"https://media.example.org/001.mp4"}]},
+                   {"number":1,"episodes":[
+                     {"number":3,"name":"Terceiro","videoUrl":"https://media.example.org/103.mp4"},
+                     {"number":1,"name":"Sem vídeo"},
+                     {"number":2,"name":"Segundo","videoUrl":"https://media.example.org/102.mp4","durationMinutes":50}
+                   ]}
+                 ]}}
+                """);
+        });
+        using var http = new HttpClient(handler);
+        var client = new BrowseClient(http, new Uri("https://example.org/"), null);
+        var selection = new FrameImportRequest("Série", 1, "456", IsSeries: true);
+        var item = Assert.IsType<FrameItem>(await client.GetTitleForImport(selection, default));
+        var season = Assert.Single(item.Seasons!);
+        var episode = Assert.Single(season.Episodes!);
+        Assert.Equal(1, season.Number);
+        Assert.Equal(2, episode.Number);
+        Assert.Equal(50, episode.DurationMinutes);
+        var again = Assert.IsType<FrameItem>(await client.GetTitleForImport(selection, default));
+        Assert.Equal(item.Id, again.Id);
+        Assert.Equal(episode.Id, Assert.Single(Assert.Single(again.Seasons!).Episodes!).Id);
+        Assert.Null(await client.GetTitleForImport(selection with { IsSeries = false }, default));
+
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var config = new FrameConfiguration
+            {
+                SeriesPath = Path.Combine(root, "series"),
+                MoviesPath = Path.Combine(root, "movies")
+            };
+            var allowed = SyncCatalogTask.ReadMediaAllowlist("media.example.org");
+            await SyncCatalogTask.Materialize(item, config, allowed, default);
+            await SyncCatalogTask.Materialize(again, config, allowed, default);
+            var show = Assert.Single(Directory.GetDirectories(config.SeriesPath));
+            Assert.True(File.Exists(Path.Combine(show, "tvshow.nfo")));
+            var stream = Assert.Single(Directory.GetFiles(show, "*.strm", SearchOption.AllDirectories));
+            Assert.Equal(Path.Combine(show, "Season 01", "S01E02.strm"), stream);
+            Assert.Equal(episode.VideoUrl, (await File.ReadAllTextAsync(stream)).Trim());
+            Assert.True(File.Exists(Path.ChangeExtension(stream, ".nfo")));
+            Assert.False(Directory.Exists(config.MoviesPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
     private static HttpResponseMessage Json(string content) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(content, Encoding.UTF8, "application/json")

@@ -153,50 +153,64 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
 
         return await Run(async (client, config) =>
         {
-            var hosts = SyncCatalogTask.ReadMediaAllowlist(config.MediaHosts);
-            if (!Path.IsPathFullyQualified(config.MoviesPath))
-                return BadRequest(new { message = "Salve a pasta absoluta de filmes." });
+            var item = await client.GetTitleForImport(selection, ct);
+            if (item is null)
+                return NotFound(new { message = "Título indisponível. Faça uma nova busca." });
 
-            var movie = await client.GetMovie(selection, ct);
-            if (movie is null)
-                return NotFound(new { message = "Filme indisponível. Faça uma nova busca." });
-            if (string.IsNullOrWhiteSpace(movie.VideoUrl))
-                return UnprocessableEntity(new { message = "A API não retornou uma URL de vídeo para este filme." });
+            var isSeries = item.Type == "series";
+            var mediaPath = isSeries ? config.SeriesPath : config.MoviesPath;
+            if (!Path.IsPathFullyQualified(mediaPath))
+                return BadRequest(new { message = isSeries
+                    ? "Salve a pasta absoluta dedicada a séries antes de importar."
+                    : "Salve a pasta absoluta de filmes." });
+            if (isSeries && Path.IsPathFullyQualified(config.MoviesPath) &&
+                (ContainsPath(config.MoviesPath, mediaPath) || ContainsPath(mediaPath, config.MoviesPath)))
+                return BadRequest(new { message = "Use pastas separadas para filmes e séries, sem colocar uma dentro da outra." });
+
+            var season = item.Seasons?.SingleOrDefault();
+            var episode = season?.Episodes?.SingleOrDefault();
+            var videoUrl = isSeries ? episode?.VideoUrl : item.VideoUrl;
+            if (string.IsNullOrWhiteSpace(videoUrl))
+                return UnprocessableEntity(new { message = isSeries
+                    ? "A API não retornou um episódio com URL de vídeo para esta série."
+                    : "A API não retornou uma URL de vídeo para este filme." });
+
+            var hosts = SyncCatalogTask.ReadMediaAllowlist(config.MediaHosts);
             try
             {
-                _ = SyncCatalogTask.PlaybackUrl(movie.VideoUrl, hosts);
+                _ = SyncCatalogTask.PlaybackUrl(videoUrl, hosts);
             }
             catch (InvalidDataException ex)
             {
                 return UnprocessableEntity(new { message = ex.Message });
             }
 
-            BrowseMovieMetadata? metadata = null;
+            BrowseTitleMetadata? metadata = null;
             using (var metadataBudget = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
                 metadataBudget.CancelAfter(TimeSpan.FromSeconds(10));
                 try
                 {
-                    metadata = await client.GetMovieMetadata(selection.ExternalId, metadataBudget.Token);
+                    metadata = await client.GetTitleMetadata(selection.ExternalId, metadataBudget.Token);
                 }
                 catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or JsonException ||
                     ex is OperationCanceledException && !ct.IsCancellationRequested)
                 {
-                    logger.LogWarning("O Frame não conseguiu enriquecer os metadados do filme {Id} ({Type}).",
-                        movie.Id, ex.GetType().Name);
+                    logger.LogWarning("O Frame não conseguiu enriquecer os metadados do título {Id} ({Type}).",
+                        item.Id, ex.GetType().Name);
                 }
             }
 
             if (metadata is not null)
-                movie = metadata.ApplyTo(movie);
+                item = metadata.ApplyTo(item);
 
             string? artworkWarning = null;
-            var artworkHosts = new HashSet<string>(hosts, hosts.Comparer) { BrowseMovieMetadata.ArtworkHost };
-            var fallback = movie.Images is null ? null : new FrameImages(
-                AllowedArtwork(movie.Images.PosterUrl, artworkHosts),
-                AllowedArtwork(movie.Images.BackdropUrl, artworkHosts),
-                AllowedArtwork(movie.Images.LogoUrl, artworkHosts),
-                AllowedArtwork(movie.Images.LogoBigUrl, artworkHosts));
+            var artworkHosts = new HashSet<string>(hosts, hosts.Comparer) { BrowseTitleMetadata.ArtworkHost };
+            var fallback = item.Images is null ? null : new FrameImages(
+                AllowedArtwork(item.Images.PosterUrl, artworkHosts),
+                AllowedArtwork(item.Images.BackdropUrl, artworkHosts),
+                AllowedArtwork(item.Images.LogoUrl, artworkHosts),
+                AllowedArtwork(item.Images.LogoBigUrl, artworkHosts));
 
             await SyncCatalogTask.SyncLock.WaitAsync(ct);
             try
@@ -204,8 +218,8 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 if (Plugin.Instance?.Configuration is not { OnDemand: true } current || !ReferenceEquals(current, config))
                     return Conflict(new { message = "A configuração mudou. Faça uma nova busca." });
 
-                await SyncCatalogTask.Materialize(movie with { Images = null }, config, hosts, ct);
-                var folder = Path.Combine(Path.GetFullPath(config.MoviesPath), "Frame-" + movie.Id);
+                await SyncCatalogTask.Materialize(item with { Images = null }, config, hosts, ct);
+                var folder = Path.Combine(Path.GetFullPath(mediaPath), "Frame-" + item.Id);
                 try
                 {
                     if (!await SyncCatalogTask.ImportArtwork(folder, metadata?.Artwork(), artworkHosts, ct, fallback))
@@ -214,19 +228,33 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException ||
                     ex is TaskCanceledException && !ct.IsCancellationRequested)
                 {
-                    logger.LogWarning("Frame importou o filme {Id}, mas uma imagem falhou ({Type}).", movie.Id, ex.GetType().Name);
+                    logger.LogWarning("Frame importou o título {Id}, mas uma imagem falhou ({Type}).", item.Id, ex.GetType().Name);
                     artworkWarning = " Parte do material visual não pôde ser importada.";
                 }
 
-                monitor.ReportFileSystemChanged(Path.Combine(folder, "movie.strm"));
+                var mediaFile = isSeries
+                    ? Path.Combine(folder, SyncCatalogTask.SeasonFolderName(season!.Number),
+                        SyncCatalogTask.EpisodeFileName(season.Number, episode!.Number) + ".strm")
+                    : Path.Combine(folder, "movie.strm");
+                monitor.ReportFileSystemChanged(mediaFile);
             }
             finally
             {
                 SyncCatalogTask.SyncLock.Release();
             }
 
-            return Ok(new { message = "Filme importado. Aguarde a atualização da biblioteca." + artworkWarning });
+            var message = isSeries
+                ? $"Episódio {SyncCatalogTask.EpisodeFileName(season!.Number, episode!.Number)} importado. Aguarde a atualização da biblioteca."
+                : "Filme importado. Aguarde a atualização da biblioteca.";
+            return Ok(new { message = message + artworkWarning });
         }, ct);
+    }
+
+    private static bool ContainsPath(string root, string path)
+    {
+        var relative = Path.GetRelativePath(root, path);
+        return !Path.IsPathRooted(relative) && relative != ".." &&
+            !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     private async Task<IActionResult> Run(Func<BrowseClient, FrameConfiguration, Task<IActionResult>> action,
