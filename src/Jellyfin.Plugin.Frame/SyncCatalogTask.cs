@@ -130,6 +130,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             nfo.Add(item.Year is int year ? new XElement("year", year) : null,
                 item.Rating is double rating ? new XElement("rating", rating) : null,
                 (item.Genres ?? []).Select(genre => new XElement("genre", genre)));
+            AddMovieMetadata(nfo, item.MovieMetadata);
             var url = PlaybackUrl(item.VideoUrl, hosts);
             var folder = OpenFolder(config.MoviesPath, "Frame-" + item.Id);
             await Write(folder, "movie.nfo", nfo.ToString(), cancellationToken);
@@ -173,27 +174,70 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         await ImportArtwork(series, item.Images, hosts, cancellationToken);
     }
 
-    internal static async Task ImportArtwork(string folder, FrameImages? images, HashSet<string> hosts,
-        CancellationToken cancellationToken)
+    internal static async Task<bool> ImportArtwork(string folder, FrameImages? images, HashSet<string> hosts,
+        CancellationToken cancellationToken, FrameImages? fallback = null, HttpClient? imageClient = null)
     {
-        if (images is null)
+        if (images is null && fallback is null)
+            return false;
+
+        imageClient ??= Http;
+        Exception? firstFailure = null;
+        var posterSaved = false;
+        foreach (var (name, variants) in new[]
+        {
+            ("poster", new[] { images?.PosterUrl, images?.LogoBigUrl, fallback?.PosterUrl, fallback?.LogoBigUrl, fallback?.BackdropUrl }),
+            ("fanart", new[] { images?.BackdropUrl, fallback?.BackdropUrl }),
+            ("logo", new[] { images?.LogoUrl, fallback?.LogoUrl })
+        })
+        {
+            Exception? failure = null;
+            foreach (var value in variants.Where(url => !string.IsNullOrWhiteSpace(url)).Distinct(StringComparer.Ordinal))
+            {
+                try
+                {
+                    using var response = await imageClient.GetAsync(MediaUrl(value, hosts), cancellationToken);
+                    response.EnsureSuccessStatusCode();
+                    var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                    var extension = response.Content.Headers.ContentType?.MediaType switch
+                    {
+                        "image/jpeg" when bytes.AsSpan().StartsWith(new byte[] { 0xff, 0xd8, 0xff }) => ".jpg",
+                        "image/png" when bytes.AsSpan().StartsWith(new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a }) => ".png",
+                        _ => throw new InvalidDataException("Formato de imagem inválido.")
+                    };
+
+                    await WriteBytes(folder, name + extension, bytes, cancellationToken);
+                    posterSaved |= name == "poster";
+                    failure = null;
+                    break;
+                }
+                catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or
+                    UnauthorizedAccessException || ex is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+                {
+                    failure = ex;
+                }
+            }
+            firstFailure ??= failure;
+        }
+        if (firstFailure is not null)
+            throw new IOException("Não foi possível importar todo o material visual.", firstFailure);
+        return posterSaved;
+    }
+
+    private static void AddMovieMetadata(XElement nfo, FrameMovieMetadata? metadata)
+    {
+        if (metadata is null)
             return;
 
-        foreach (var (name, value) in new[] { ("poster", images.PosterUrl), ("fanart", images.BackdropUrl), ("logo", images.LogoUrl) })
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                continue;
-            using var response = await Http.GetAsync(MediaUrl(value, hosts), cancellationToken);
-            response.EnsureSuccessStatusCode();
-            var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-            var extension = response.Content.Headers.ContentType?.MediaType switch
-            {
-                "image/jpeg" when bytes.AsSpan().StartsWith(new byte[] { 0xff, 0xd8, 0xff }) => ".jpg",
-                "image/png" when bytes.AsSpan().StartsWith(new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a }) => ".png",
-                _ => throw new InvalidDataException("Formato de imagem inválido.")
-            };
-            await WriteBytes(folder, name + extension, bytes, cancellationToken);
-        }
+        nfo.Add(
+            metadata.TmdbId > 0 ? new XElement("tmdbid", metadata.TmdbId) : null,
+            !string.IsNullOrWhiteSpace(metadata.OriginalTitle) ? new XElement("originaltitle", metadata.OriginalTitle) : null,
+            metadata.ReleaseDate is { } date ? new XElement("premiered",
+                date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)) : null,
+            (metadata.Directors ?? []).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct()
+                .Select(name => new XElement("director", name)),
+            (metadata.Cast ?? []).Where(person => !string.IsNullOrWhiteSpace(person?.Name)).Take(10)
+                .Select(person => new XElement("actor", new XElement("name", person.Name),
+                    !string.IsNullOrWhiteSpace(person.Character) ? new XElement("role", person.Character) : null)));
     }
 
     private static XElement Metadata(string type, Guid id, string? title, string? plot, int? duration)

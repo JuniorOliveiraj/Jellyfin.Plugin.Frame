@@ -171,11 +171,32 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 return UnprocessableEntity(new { message = ex.Message });
             }
 
+            BrowseMovieMetadata? metadata = null;
+            using (var metadataBudget = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                metadataBudget.CancelAfter(TimeSpan.FromSeconds(10));
+                try
+                {
+                    metadata = await client.GetMovieMetadata(selection.ExternalId, metadataBudget.Token);
+                }
+                catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or JsonException ||
+                    ex is OperationCanceledException && !ct.IsCancellationRequested)
+                {
+                    logger.LogWarning("O Frame não conseguiu enriquecer os metadados do filme {Id} ({Type}).",
+                        movie.Id, ex.GetType().Name);
+                }
+            }
+
+            if (metadata is not null)
+                movie = metadata.ApplyTo(movie);
+
             string? artworkWarning = null;
-            var images = movie.Images is null ? null : new FrameImages(
-                AllowedArtwork(movie.Images.PosterUrl, hosts),
-                AllowedArtwork(movie.Images.BackdropUrl, hosts),
-                AllowedArtwork(movie.Images.LogoUrl, hosts));
+            var artworkHosts = new HashSet<string>(hosts, hosts.Comparer) { BrowseMovieMetadata.ArtworkHost };
+            var fallback = movie.Images is null ? null : new FrameImages(
+                AllowedArtwork(movie.Images.PosterUrl, artworkHosts),
+                AllowedArtwork(movie.Images.BackdropUrl, artworkHosts),
+                AllowedArtwork(movie.Images.LogoUrl, artworkHosts),
+                AllowedArtwork(movie.Images.LogoBigUrl, artworkHosts));
 
             await SyncCatalogTask.SyncLock.WaitAsync(ct);
             try
@@ -187,13 +208,14 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 var folder = Path.Combine(Path.GetFullPath(config.MoviesPath), "Frame-" + movie.Id);
                 try
                 {
-                    await SyncCatalogTask.ImportArtwork(folder, images, hosts, ct);
+                    if (!await SyncCatalogTask.ImportArtwork(folder, metadata?.Artwork(), artworkHosts, ct, fallback))
+                        artworkWarning = " Nenhuma capa disponível nas origens de imagem permitidas.";
                 }
                 catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException ||
                     ex is TaskCanceledException && !ct.IsCancellationRequested)
                 {
                     logger.LogWarning("Frame importou o filme {Id}, mas uma imagem falhou ({Type}).", movie.Id, ex.GetType().Name);
-                    artworkWarning = " Uma imagem não pôde ser importada.";
+                    artworkWarning = " Parte do material visual não pôde ser importada.";
                 }
 
                 monitor.ReportFileSystemChanged(Path.Combine(folder, "movie.strm"));

@@ -50,13 +50,13 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
     internal async Task<FrameItem?> GetMovie(FrameImportRequest selection, CancellationToken ct)
     {
         var path = "browse/titles/" + Uri.EscapeDataString(selection.ExternalId);
-        var detail = await Read<BrowseDetail>(path, ct, allowNotFound: true);
+        var detail = await Read<BrowseDetail>(path, ct, allowMissing: true);
         if (detail is null)
         {
             var result = await ReadSearch(selection.Term, selection.Page, ct);
             if (!result.Items.Any(item => item is { IsSeries: false } && item.ExternalId == selection.ExternalId))
                 return null;
-            detail = await Read<BrowseDetail>(path, ct, allowNotFound: true);
+            detail = await Read<BrowseDetail>(path, ct, allowMissing: true);
         }
 
         if (detail is not { IsSeries: false, Movie: { } movie } || movie.ExternalId != selection.ExternalId)
@@ -70,6 +70,10 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
             movie.DurationMinutes, movie.VideoUrl, movie.Images, null);
     }
 
+    internal Task<BrowseMovieMetadata?> GetMovieMetadata(string externalId, CancellationToken ct) =>
+        Read<BrowseMovieMetadata>("browse/titles/" + Uri.EscapeDataString(externalId) + "/metadata", ct,
+            allowMissing: true);
+
     internal static bool IsValidId(string? id) => id is { Length: > 0 and <= 128 } &&
         id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
@@ -79,14 +83,14 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
         return result is { Items: not null } ? result : throw new InvalidDataException("Resposta de busca inválida.");
     }
 
-    private async Task<T?> Read<T>(string path, CancellationToken ct, bool allowNotFound = false) where T : class
+    private async Task<T?> Read<T>(string path, CancellationToken ct, bool allowMissing = false) where T : class
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(origin, path));
         if (!string.IsNullOrWhiteSpace(token))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         using var response = await http.SendAsync(request, ct);
-        if (allowNotFound && response.StatusCode == HttpStatusCode.NotFound)
+        if (allowMissing && response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent)
             return null;
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<T>(cancellationToken: ct)
