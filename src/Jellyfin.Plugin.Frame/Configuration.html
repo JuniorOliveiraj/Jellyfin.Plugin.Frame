@@ -91,6 +91,12 @@
                     <p id="frameTokenStatus" role="status" aria-live="polite"></p>
                 </form>
             </details>
+            <section id="frameSyncReports">
+                <h2>Últimas sincronizações da home</h2>
+                <button is="emby-button" id="frameRefreshReports" type="button" class="raised">Atualizar resumo</button>
+                <p id="frameReportStatus" role="status" aria-live="polite"></p>
+                <div id="frameReportList"></div>
+            </section>
             <h2>Buscar filmes e séries</h2>
             <form id="frameSearchForm">
                 <div class="inputContainer">
@@ -179,12 +185,20 @@
                         const row = document.createElement('li');
                         const label = document.createElement('span');
                         label.textContent = item.name + (item.year > 0 ? ' (' + item.year + ')' : '') + (item.isSeries ? ' · Série' : ' · Filme');
-                        const button = document.createElement('button');
-                        button.type = 'button';
-                        button.textContent = item.isSeries ? 'Importar primeiro episódio' : 'Importar';
-                        button.className = 'raised';
-                        button.addEventListener('click', () => importTitle(button, { term, page, externalId: item.externalId, isSeries: item.isSeries }));
-                        row.append(label, ' ', button);
+                        row.append(label);
+                        const actions = item.isSeries
+                            ? [['Importar série completa', true], ['Importar primeiro episódio', false]]
+                            : [['Importar', false]];
+                        for (const [text, allEpisodes] of actions) {
+                            const button = document.createElement('button');
+                            button.type = 'button';
+                            button.textContent = text;
+                            button.className = 'raised';
+                            button.addEventListener('click', () => importTitle(button, {
+                                term, page, externalId: item.externalId, isSeries: item.isSeries, allEpisodes
+                            }));
+                            row.append(' ', button);
+                        }
                         el('Results').append(row);
                     }
                     el('Status').textContent = data.items.length ? '' : 'Nenhum título nesta página.';
@@ -203,11 +217,13 @@
                 if (busy) return;
                 busy = true;
                 button.disabled = true;
-                el('Status').textContent = selection.isSeries ? 'Importando o primeiro episódio…' : 'Importando filme…';
+                el('Status').textContent = selection.allEpisodes ? 'Importando todos os episódios…' :
+                    selection.isSeries ? 'Importando o primeiro episódio…' : 'Importando filme…';
                 try {
                     const result = await request('Import', { body: selection });
                     el('Status').textContent = result.message;
-                    button.textContent = 'Importar novamente';
+                    button.textContent = selection.allEpisodes ? 'Atualizar série completa' :
+                        selection.isSeries ? 'Atualizar primeiro episódio' : 'Importar novamente';
                 } catch (error) {
                     el('Status').textContent = error.message;
                 } finally {
@@ -215,6 +231,75 @@
                     button.disabled = false;
                 }
             }
+
+            function renderReport(label, report) {
+                const section = document.createElement('section');
+                const heading = document.createElement('h3');
+                heading.textContent = label;
+                const info = document.createElement('p');
+                section.append(heading, info);
+                if (!report) {
+                    info.textContent = 'Nenhuma execução registrada.';
+                    return section;
+                }
+
+                const statuses = { completed: 'Concluída', partial: 'Com pendências', failed: 'Falhou', cancelled: 'Cancelada' };
+                info.textContent = (statuses[report.status] || 'Finalizada') + ' · ' + new Date(report.finishedAt).toLocaleString();
+                const counts = document.createElement('p');
+                counts.textContent = label === 'Filmes'
+                    ? report.movies + ' filme(s) sincronizado(s) · ' + report.pendingTitles + ' pendente(s)'
+                    : report.series + ' série(s) e ' + report.episodes + ' episódio(s) sincronizado(s) · ' +
+                        report.pendingTitles + ' série(s) e ' + report.pendingEpisodes + ' episódio(s) pendente(s)';
+                section.append(counts);
+                const additions = document.createElement('p');
+                additions.textContent = label === 'Filmes'
+                    ? 'Novos na biblioteca · ' + report.newMovies + ' filme(s)'
+                    : 'Novos na biblioteca · ' + report.newSeries + ' série(s) e ' + report.newEpisodes + ' episódio(s)';
+                section.append(additions);
+                if (report.partialHome || report.message) {
+                    const notice = document.createElement('p');
+                    notice.textContent = [report.partialHome ? 'A API retornou uma home parcial.' : '', report.message]
+                        .filter(Boolean).join(' ');
+                    section.append(notice);
+                }
+
+                if (report.issues?.length) {
+                    const details = document.createElement('details');
+                    const summary = document.createElement('summary');
+                    summary.textContent = 'Ver títulos e episódios pendentes';
+                    const list = document.createElement('ul');
+                    for (const issue of report.issues) {
+                        const row = document.createElement('li');
+                        row.textContent = issue.title + (issue.episode ? ' · ' + issue.episode : '') + ' · ' + issue.reason;
+                        list.append(row);
+                    }
+                    details.append(summary, list);
+                    if (report.omittedIssues) {
+                        const omitted = document.createElement('p');
+                        omitted.textContent = report.omittedIssues + ' pendência(s) adicional(is) nos totais acima.';
+                        details.append(omitted);
+                    }
+                    section.append(details);
+                }
+                return section;
+            }
+
+            async function refreshReports() {
+                if (!savedMode || el('RefreshReports').disabled) return;
+                el('RefreshReports').disabled = true;
+                el('ReportStatus').textContent = 'Carregando resumo…';
+                try {
+                    const data = await request('SyncReports');
+                    el('ReportList').replaceChildren(renderReport('Filmes', data.movies), renderReport('Séries', data.series));
+                    el('ReportStatus').textContent = '';
+                } catch (error) {
+                    el('ReportStatus').textContent = error.message;
+                } finally {
+                    el('RefreshReports').disabled = false;
+                }
+            }
+
+            el('RefreshReports').addEventListener('click', refreshReports);
 
             async function updateAccountStatus() {
                 if (!savedMode) return;
@@ -298,7 +383,7 @@
                     el('SyncHomeMovies').checked = config.SyncHomeMovies === true;
                     el('SyncHomeSeries').checked = config.SyncHomeSeries === true;
                     updateMode();
-                    await updateAccountStatus();
+                    await Promise.all([updateAccountStatus(), refreshReports()]);
                 } catch {
                     Dashboard.alert('Falha ao carregar a configuração do Frame.');
                 } finally {
@@ -320,7 +405,7 @@
                     savedApiUrl = config.BrowseApiUrl;
                     resetResults();
                     updateMode();
-                    await updateAccountStatus();
+                    await Promise.all([updateAccountStatus(), refreshReports()]);
                 } catch {
                     Dashboard.alert('Falha ao salvar a configuração do Frame.');
                 } finally {

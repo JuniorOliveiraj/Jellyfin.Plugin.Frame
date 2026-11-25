@@ -24,16 +24,17 @@ public sealed class SyncHomeMoviesTask(IApplicationPaths paths, IDataProtectionP
 
 
     internal static async Task ImportHome(BrowseClient client, FrameConfiguration config, Func<bool> stillConfigured,
-        Action<string> notify, ILogger logger, IProgress<double> progress, CancellationToken ct)
+        Action<string> notify, ILogger logger, IProgress<double> progress, CancellationToken ct, HomeSyncReport? report = null)
     {
+        report ??= new HomeSyncReport();
         var home = await client.GetHome(ct);
+        report.PartialHome = home.Partial;
 
         var cards = HomeSync.GetCards(home, series: false);
 
         var hosts = SyncCatalogTask.ReadMediaAllowlist(config.MediaHosts);
         var artworkHosts = new HashSet<string>(hosts, hosts.Comparer) { BrowseTitleMetadata.ArtworkHost };
         var importedIds = new HashSet<Guid>();
-        var failures = 0;
         string? nextStep = null;
         for (var i = 0; i < cards.Length; i++)
         {
@@ -42,12 +43,13 @@ public sealed class SyncHomeMoviesTask(IApplicationPaths paths, IDataProtectionP
                 throw new InvalidOperationException("A configuração do Frame mudou. Execute a tarefa novamente.");
 
             var card = cards[i];
+            string? playbackWarning = null;
             try
             {
                 var movie = await client.GetHomeTitle(card, ct);
                 if (movie is null)
                 {
-                    failures++;
+                    report.AddPending(card, "A API não disponibilizou uma URL de vídeo para este filme.");
                     logger.LogWarning("Filme da home sem vídeo disponível ({ExternalId}).", card.Item.ExternalId);
                     continue;
                 }
@@ -60,7 +62,8 @@ public sealed class SyncHomeMoviesTask(IApplicationPaths paths, IDataProtectionP
                 }
                 catch (InvalidDataException ex)
                 {
-                    nextStep ??= ex.Message;
+                    playbackWarning = ex.Message;
+                    nextStep ??= playbackWarning;
                     throw;
                 }
 
@@ -81,8 +84,12 @@ public sealed class SyncHomeMoviesTask(IApplicationPaths paths, IDataProtectionP
                         throw new InvalidOperationException("A configuração do Frame mudou. Execute a tarefa novamente.");
 
                     var stream = Path.Combine(folder, "movie.strm");
+                    var newMovie = !File.Exists(stream);
                     var changed = await SyncCatalogTask.Materialize(movie with { Images = null }, config, hosts, ct, preserveExistingNfo: true);
                     importedIds.Add(movie.Id);
+                    report.Movies = importedIds.Count;
+                    if (newMovie)
+                        report.NewMovies++;
                     try
                     {
                         await HomeSync.WriteMissingArtwork(folder, movie.Images, metadata, artworkHosts, ct);
@@ -103,7 +110,7 @@ public sealed class SyncHomeMoviesTask(IApplicationPaths paths, IDataProtectionP
             }
             catch (Exception ex) when (HomeSync.IsItemFailure(ex, ct))
             {
-                failures++;
+                report.AddPending(card, playbackWarning ?? HomeSync.DescribeItemFailure(ex));
                 logger.LogWarning("O Frame não sincronizou o filme da home {ExternalId} ({Type}).",
                     card.Item.ExternalId, ex.GetType().Name);
             }
@@ -115,11 +122,15 @@ public sealed class SyncHomeMoviesTask(IApplicationPaths paths, IDataProtectionP
 
         progress.Report(100);
         logger.LogInformation("Home FILMES-JR: {Imported} sincronizados; {Failures} falhas; resposta parcial {Partial}.",
-            importedIds.Count, failures, home.Partial);
-        if (failures > 0)
+            report.Movies, report.PendingTitles, home.Partial);
+        if (report.PendingTitles > 0)
+        {
+            report.Status = "partial";
+            report.Message = nextStep;
             throw new InvalidOperationException(
-                $"Frame sincronizou {importedIds.Count} filme(s). {failures} título(s) ficaram pendentes. " +
-                (nextStep ?? "Confira os Registros do Jellyfin."));
+                $"Frame sincronizou {report.Movies} filme(s). {report.PendingTitles} título(s) ficaram pendentes. " +
+                (nextStep ?? "Confira o resumo no painel do Frame."));
+        }
     }
 
 }

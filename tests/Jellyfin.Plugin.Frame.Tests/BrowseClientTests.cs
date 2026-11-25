@@ -128,6 +128,21 @@ public sealed class BrowseClientTests
             Assert.Equal(Path.Combine(show, "Season 01", "S01E02.strm"), stream);
             Assert.Equal(episode.VideoUrl, (await File.ReadAllTextAsync(stream)).Trim());
             Assert.True(File.Exists(Path.ChangeExtension(stream, ".nfo")));
+            var fullRequest = JsonSerializer.Deserialize<FrameImportRequest>(
+                """{"term":"Série","page":1,"externalId":"456","isSeries":true,"allEpisodes":true}""");
+            var full = Assert.IsType<FrameItem>(await client.GetTitleForImport(fullRequest!, default));
+            Assert.Equal(again.Id, full.Id);
+
+            var selected = SyncCatalogTask.SelectSeriesEpisodes(full, allowed, default);
+            Assert.Equal(4, selected.Imported);
+            Assert.Equal(1, selected.Pending);
+            Assert.Empty(selected.Guidance);
+            var completeSeries = full with { Seasons = selected.Seasons };
+            await SyncCatalogTask.Materialize(completeSeries, config, allowed, default, preserveExistingNfo: true);
+            Assert.False(await SyncCatalogTask.Materialize(completeSeries, config, allowed, default, preserveExistingNfo: true));
+            Assert.Equal(show, Assert.Single(Directory.GetDirectories(config.SeriesPath)));
+            Assert.Equal(4, Directory.GetFiles(show, "*.strm", SearchOption.AllDirectories).Length);
+            Assert.True(File.Exists(stream));
             Assert.False(Directory.Exists(config.MoviesPath));
         }
         finally

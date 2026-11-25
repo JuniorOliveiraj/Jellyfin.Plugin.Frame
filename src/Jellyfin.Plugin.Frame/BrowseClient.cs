@@ -40,7 +40,8 @@ public sealed record FrameImportRequest(
     [property: JsonPropertyName("term")] string Term,
     [property: JsonPropertyName("page")] int Page,
     [property: JsonPropertyName("externalId")] string ExternalId,
-    [property: JsonPropertyName("isSeries")] bool? IsSeries = null);
+    [property: JsonPropertyName("isSeries")] bool? IsSeries = null,
+    [property: JsonPropertyName("allEpisodes")] bool AllEpisodes = false);
 
 internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
 {
@@ -73,7 +74,7 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
             return null;
 
         if (detail is { IsSeries: true, Series: { } series } && series.ExternalId == selection.ExternalId)
-            return MapSeries(series);
+            return MapSeries(series, allEpisodes: selection.AllEpisodes);
         if (detail is not { IsSeries: false, Movie: { } movie } || movie.ExternalId != selection.ExternalId)
             return null;
 

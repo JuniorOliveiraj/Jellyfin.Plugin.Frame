@@ -179,6 +179,46 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         return changed;
     }
 
+    internal static (FrameSeason[] Seasons, int Imported, int Pending, HashSet<string> Guidance) SelectSeriesEpisodes(
+        FrameItem show, HashSet<string> hosts, CancellationToken ct, Action<string, string>? onPending = null)
+    {
+        var seasons = new List<FrameSeason>();
+        var guidance = new HashSet<string>(StringComparer.Ordinal);
+        var imported = 0;
+        var pending = 0;
+        foreach (var season in show.Seasons ?? [])
+        {
+            var episodes = new List<FrameEpisode>();
+            foreach (var episode in season.Episodes ?? [])
+            {
+                ct.ThrowIfCancellationRequested();
+                if (string.IsNullOrWhiteSpace(episode.VideoUrl))
+                {
+                    pending++;
+                    onPending?.Invoke(EpisodeFileName(season.Number, episode.Number), "A API não retornou uma URL de vídeo.");
+                    continue;
+                }
+
+                try
+                {
+                    _ = PlaybackUrl(episode.VideoUrl, hosts);
+                    episodes.Add(episode);
+                }
+                catch (InvalidDataException ex)
+                {
+                    pending++;
+                    guidance.Add(ex.Message);
+                    onPending?.Invoke(EpisodeFileName(season.Number, episode.Number), ex.Message);
+                }
+            }
+            if (episodes.Count == 0)
+                continue;
+            seasons.Add(season with { Episodes = episodes.ToArray() });
+            imported += episodes.Count;
+        }
+        return (seasons.ToArray(), imported, pending, guidance);
+    }
+
     internal static string EpisodeFileName(int season, int episode) => FormattableString.Invariant($"S{season:D2}E{episode:D2}");
 
     internal static string SeasonFolderName(int season) => FormattableString.Invariant($"Season {season:D2}");

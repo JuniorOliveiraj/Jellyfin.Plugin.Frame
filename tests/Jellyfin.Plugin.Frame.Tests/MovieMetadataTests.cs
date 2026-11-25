@@ -84,6 +84,73 @@ public sealed class MovieMetadataTests
         }
     }
 
+    [Fact]
+    public async Task FirstImportEnrichesAWholeSeriesWithoutACatalogYear()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        const string posterUrl = "https://image.tmdb.org/t/p/w500/series.jpg";
+        var poster = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nX0AAAAASUVORK5CYII=");
+        using var api = new HttpClient(new FakeHttp(request =>
+        {
+            var json = request.RequestUri!.AbsolutePath switch
+            {
+                "/browse/titles/601" => """
+                    {"isSeries":true,"series":{"externalId":"601","name":"Série sem ano","year":0,"seasons":[
+                        {"number":1,"episodes":[{"number":1,"videoUrl":"https://media.example.org/pilot.mp4"}]},
+                        {"number":2,"episodes":[{"number":1,"videoUrl":"https://media.example.org/next.mp4"}]}
+                    ]}}
+                    """,
+                "/browse/titles/601/metadata" => """
+                    {"id":42,"originalName":"Original","releaseDate":"2008-01-20","posterPath":"/series.jpg",
+                     "overview":"Sinopse do backend"}
+                    """,
+                _ => throw new InvalidOperationException("Rota inesperada.")
+            };
+            return new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        }));
+        using var images = new HttpClient(new FakeHttp(request =>
+        {
+            Assert.Equal(posterUrl, request.RequestUri!.AbsoluteUri);
+            Assert.Null(request.Headers.Authorization);
+            var content = new ByteArrayContent(poster);
+            content.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+            return new(HttpStatusCode.OK) { Content = content };
+        }));
+
+        try
+        {
+            var client = new BrowseClient(api, new Uri("https://frame.example/"), "test-token");
+            var show = Assert.IsType<FrameItem>(await client.GetTitleForImport(new("Série sem ano", 1, "601", true, true), default));
+            Assert.Null(show.Year);
+            var metadata = Assert.IsType<BrowseTitleMetadata>(await client.GetTitleMetadata("601", default));
+            var config = new FrameConfiguration { SeriesPath = root };
+            var hosts = SyncCatalogTask.ReadMediaAllowlist("media.example.org");
+            var allowed = SyncCatalogTask.SelectSeriesEpisodes(show, hosts, default);
+            var enriched = metadata.ApplyTo(show) with { Seasons = allowed.Seasons, Images = null };
+            Assert.True(await SyncCatalogTask.Materialize(enriched, config, hosts, default, preserveExistingNfo: true));
+            var folder = Assert.Single(Directory.GetDirectories(root));
+            var artworkHosts = new HashSet<string>(hosts, hosts.Comparer) { BrowseTitleMetadata.ArtworkHost };
+            Assert.True(await SyncCatalogTask.ImportArtwork(folder, metadata.Artwork(), artworkHosts, default, imageClient: images));
+
+            var nfo = XElement.Load(Path.Combine(folder, "tvshow.nfo"));
+            Assert.Equal(42, (int?)nfo.Element("tmdbid"));
+            Assert.Equal(2008, (int?)nfo.Element("year"));
+            Assert.Equal("2008-01-20", (string?)nfo.Element("premiered"));
+            Assert.Equal("Sinopse do backend", (string?)nfo.Element("plot"));
+            Assert.Equal(poster, await File.ReadAllBytesAsync(Path.Combine(folder, "poster.png")));
+            Assert.Equal("https://media.example.org/next.mp4",
+                (await File.ReadAllTextAsync(Path.Combine(folder, "Season 02", "S02E01.strm"))).Trim());
+            Assert.False(await SyncCatalogTask.Materialize(enriched, config, hosts, default, preserveExistingNfo: true));
+            Assert.Equal(folder, Assert.Single(Directory.GetDirectories(root)));
+            Assert.Equal(2, Directory.GetFiles(folder, "*.strm", SearchOption.AllDirectories).Length);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.NoContent)]
     [InlineData(HttpStatusCode.NotFound)]

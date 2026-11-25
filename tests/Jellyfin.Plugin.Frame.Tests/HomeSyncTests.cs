@@ -58,8 +58,13 @@ public sealed class HomeSyncTests
 
             calls.Clear();
             url = "https://media.example.org/refreshed.mp4";
+            var report = new HomeSyncReport();
             await SyncHomeMoviesTask.ImportHome(client, config, () => true, notified.Add,
-                NullLogger.Instance, new Progress<double>(), default);
+                NullLogger.Instance, new Progress<double>(), default, report);
+            Assert.True(report.PartialHome);
+            Assert.Equal(2, report.Movies);
+            Assert.Equal(1, report.NewMovies);
+            Assert.Equal(0, report.PendingTitles);
             Assert.Equal(1, calls.Count(path => path == "/browse/titles/111"));
             Assert.DoesNotContain("/browse/titles/333", calls);
             Assert.Equal(3, Directory.GetDirectories(root).Length);
@@ -146,10 +151,23 @@ public sealed class HomeSyncTests
             const string identified = "<tvshow><title>Série identificada</title><tmdbid>42</tmdbid></tvshow>";
             await File.WriteAllTextAsync(nfo, identified);
 
-            Task Sync() => SyncHomeSeriesTask.ImportHome(client, config, () => true, notified.Add,
-                NullLogger.Instance, new Progress<double>(), default);
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(Sync);
+            Task Sync(HomeSyncReport? result = null) => SyncHomeSeriesTask.ImportHome(client, config, () => true,
+                notified.Add, NullLogger.Instance, new Progress<double>(), default, result);
+            var report = new HomeSyncReport();
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Sync(report));
             Assert.Contains("http://video.example.org:8080", error.Message);
+            Assert.Equal("partial", report.Status);
+            Assert.Equal(1, report.Series);
+            Assert.Equal(3, report.Episodes);
+            Assert.Equal(0, report.NewSeries);
+            Assert.Equal(2, report.NewEpisodes);
+            Assert.Equal(0, report.PendingTitles);
+            Assert.Equal(1, report.PendingEpisodes);
+            var pending = Assert.Single(report.Issues);
+            Assert.Equal("Série da home", pending.Title);
+            Assert.Equal("S01E02", pending.Episode);
+            Assert.Contains("http://video.example.org:8080", pending.Reason);
+            Assert.DoesNotContain("102.mp4", pending.Reason);
             Assert.Equal(3, Directory.GetFiles(folder, "*.strm", SearchOption.AllDirectories).Length);
             Assert.Equal(folder, Assert.Single(notified));
             Assert.Equal(identified, await File.ReadAllTextAsync(nfo));
@@ -166,7 +184,12 @@ public sealed class HomeSyncTests
             Assert.Equal(folder, Assert.Single(notified));
 
             notified.Clear();
-            await Sync();
+            var repeated = new HomeSyncReport();
+            await Sync(repeated);
+            Assert.Equal(1, repeated.Series);
+            Assert.Equal(4, repeated.Episodes);
+            Assert.Equal(0, repeated.NewSeries);
+            Assert.Equal(0, repeated.NewEpisodes);
             Assert.Empty(notified);
             Assert.Equal(4, Directory.GetFiles(folder, "*.strm", SearchOption.AllDirectories).Length);
         }
@@ -176,6 +199,40 @@ public sealed class HomeSyncTests
                 Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task LatestReportsForMoviesAndSeriesAreStoredSeparately()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            Assert.Null(await HomeSyncReportStore.Read(root, series: false, default));
+            var finishedAt = DateTimeOffset.UtcNow;
+            await HomeSyncReportStore.Write(root, series: false, new() { Movies = 10, FinishedAt = finishedAt });
+            var series = new HomeSyncReport { Series = 2, Episodes = 5, Status = "partial" };
+            series.AddPending(new(new("601", "Série", 0, true), null), "Sem vídeo.", "S01E02");
+            await HomeSyncReportStore.Write(root, series: true, series);
+            await HomeSyncReportStore.Write(root, series: false,
+                new() { Movies = 28, Status = "completed", FinishedAt = finishedAt });
+
+            var movies = Assert.IsType<HomeSyncReport>(await HomeSyncReportStore.Read(root, series: false, default));
+            Assert.Equal(28, movies.Movies);
+            Assert.Equal("completed", movies.Status);
+            Assert.Equal(finishedAt, movies.FinishedAt);
+
+            var storedSeries = Assert.IsType<HomeSyncReport>(await HomeSyncReportStore.Read(root, series: true, default));
+            Assert.Equal(5, storedSeries.Episodes);
+            Assert.Equal("partial", storedSeries.Status);
+            Assert.Equal(1, storedSeries.PendingEpisodes);
+            Assert.Equal(series.Issues, storedSeries.Issues);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static HttpResponseMessage Json(string content) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(content, Encoding.UTF8, "application/json")
