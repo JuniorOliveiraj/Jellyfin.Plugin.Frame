@@ -5,7 +5,7 @@ Plugin experimental para Jellyfin **10.11.x**, compilado com .NET 9 contra Jelly
 ## Publicação e instalação pelo catálogo
 
 1. Envie este projeto para um **repositório público** no GitHub, com GitHub Actions habilitado.
-2. Para publicar esta versão, envie a tag `v0.2.1.0` a partir do commit que contém o código e o workflow. A tag deve corresponder à versão no `.csproj`.
+2. Envie o commit para a main. Após os testes, o GitHub Actions publica uma release se a versão no .csproj for mais nova que as já publicadas. A pipeline cria a tag automaticamente. Pull requests rodam os testes. Só pushes na main geram o pacote, o manifesto e a release.
 3. Confira a release no GitHub. O workflow publica o ZIP, o SHA-256 e o `manifest.json` com a URL e o checksum do ZIP.
 4. Em **Painel → Plugins → Repositórios → Novo repositório**, informe o nome **Frame** e a URL `https://github.com/USUARIO/REPOSITORIO/releases/latest/download/manifest.json`. Substitua `USUARIO/REPOSITORIO` pelos dados do seu GitHub.
 5. Em **Catálogo**, instale **Frame** e reinicie o Jellyfin Server.
