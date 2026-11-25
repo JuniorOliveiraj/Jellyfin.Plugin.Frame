@@ -25,6 +25,58 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
         return icon is null ? NotFound() : File(icon, "image/png");
     }
 
+    [HttpPost("Session")]
+    public async Task<IActionResult> SignIn([FromBody] FrameLoginRequest request, CancellationToken ct)
+    {
+        var config = Plugin.Instance?.Configuration;
+        if (config is null || GetOrigin(config) is not { } origin ||
+            !string.Equals(request.ApiUrl, config.BrowseApiUrl, StringComparison.Ordinal))
+            return BadRequest(new { message = "Salve a URL base HTTPS da API antes de entrar." });
+
+        var email = request.Email?.Trim();
+        if (email is not { Length: > 0 and <= 254 } || request.Password is not { Length: > 0 and <= 1024 } password)
+            return BadRequest(new { message = "Informe o e-mail e a senha da sua conta FILMES-JR." });
+
+        try
+        {
+            await AccountSession(origin).SignIn(email, password, ct);
+            return Ok(new { message = "Conta FILMES-JR conectada." });
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            return BadRequest(new { message = "E-mail ou senha incorretos." });
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Forbidden)
+        {
+            return StatusCode(403, new { message = "A conta FILMES-JR está inativa ou sem acesso." });
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return StatusCode(504, new { message = "A API FILMES-JR demorou para responder." });
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or
+            UnauthorizedAccessException or CryptographicException or JsonException)
+        {
+            logger.LogWarning("Frame não conseguiu conectar a conta ({Type}).", ex.GetType().Name);
+            return StatusCode(502, new { message = "Não foi possível conectar a conta. Confira a API e o armazenamento do Jellyfin." });
+        }
+    }
+
+    [HttpGet("Session")]
+    public async Task<IActionResult> GetSession(CancellationToken ct)
+    {
+        if (GetOrigin() is not { } origin)
+            return Ok(new { connected = false });
+        try
+        {
+            return Ok(new { connected = await AccountSession(origin).HasSession(ct) });
+        }
+        catch (Exception ex) when (ex is CryptographicException or JsonException or InvalidDataException)
+        {
+            return Ok(new { connected = false });
+        }
+    }
+
     [HttpPut("Token")]
     public async Task<IActionResult> SaveToken([FromBody] FrameTokenRequest request, CancellationToken ct)
     {
@@ -33,6 +85,7 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
         var token = request.Token?.Trim();
         if (token is not { Length: > 0 and <= 8192 } || token.Any(c => c is < '!' or > '~'))
             return BadRequest(new { message = "Informe um token válido, sem espaços." });
+        await BrowseAccountSession.Gate.WaitAsync(ct);
         try
         {
             await BrowseTokenStore.Write(TokenPath, origin, token, protection, ct);
@@ -43,22 +96,32 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
             logger.LogWarning("Frame não conseguiu salvar a credencial ({Type}).", ex.GetType().Name);
             return StatusCode(500, new { message = "Não foi possível proteger ou gravar o token no servidor." });
         }
+        finally
+        {
+            BrowseAccountSession.Gate.Release();
+        }
     }
 
     [HttpDelete("Token")]
-    public IActionResult RemoveToken()
+    public async Task<IActionResult> RemoveToken(CancellationToken ct)
     {
         try
         {
-            if (System.IO.File.Exists(TokenPath))
-                System.IO.File.Delete(TokenPath);
-            return Ok(new { message = "Token do formulário removido. A variável de ambiente será usada se estiver configurada." });
+            if (GetOrigin() is not { } origin)
+                return BadRequest(new { message = "Salve a URL base HTTPS da API primeiro." });
+            var revoked = await AccountSession(origin).SignOut(ct);
+            return Ok(new { message = revoked
+                ? "Credenciais removidas. A variável de ambiente será usada se estiver configurada."
+                : "Credenciais removidas do Jellyfin. A API não confirmou o encerramento da sessão." });
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return StatusCode(500, new { message = "Não foi possível remover o token do servidor." });
+            return StatusCode(500, new { message = "Não foi possível remover as credenciais do servidor." });
         }
     }
+
+    private BrowseAccountSession AccountSession(Uri origin) =>
+        new(BrowseClient.SharedHttp, origin, TokenPath, protection);
 
     private string TokenPath => Path.Combine(paths.PluginConfigurationsPath, "Jellyfin.Plugin.Frame.browse-token");
 
@@ -147,17 +210,17 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
             return BadRequest(new { message = "Ative o modo sob demanda e salve a URL base HTTPS da API." });
         try
         {
-            var token = await BrowseTokenStore.Read(TokenPath, baseUri, protection, ct)
+            var token = await AccountSession(baseUri).GetAccessToken(ct)
                 ?? Environment.GetEnvironmentVariable("FRAME_API_TOKEN");
             return await action(new BrowseClient(BrowseClient.SharedHttp, baseUri, token), config);
         }
         catch (CryptographicException)
         {
-            return Conflict(new { message = "O token salvo não pode ser usado com esta URL da API. Salve um token novo ou remova o anterior." });
+            return Conflict(new { message = "A credencial salva não pode ser usada com esta URL da API. Entre novamente ou remova a credencial." });
         }
         catch (HttpRequestException ex) when (ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
-            return StatusCode(502, new { message = "A API recusou o acesso. Confira o token e a permissão da conta do Frame." });
+            return StatusCode(502, new { message = "A API recusou o acesso. Entre novamente ou confira a permissão da conta FILMES-JR." });
         }
         catch (HttpRequestException ex)
         {
@@ -183,3 +246,10 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
 }
 
 public sealed record FrameTokenRequest(string? Token);
+
+public sealed class FrameLoginRequest
+{
+    public string? ApiUrl { get; init; }
+    public string? Email { get; init; }
+    public string? Password { get; init; }
+}

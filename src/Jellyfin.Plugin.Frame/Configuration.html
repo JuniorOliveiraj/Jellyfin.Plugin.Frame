@@ -52,16 +52,33 @@
         </form>
 
         <section id="frameSearchSection" hidden>
-            <form id="frameTokenForm" autocomplete="off">
+            <h2>Conta FILMES-JR</h2>
+            <form id="frameLoginForm">
                 <div class="inputContainer">
-                    <label for="frameToken">Token da API</label>
-                    <input is="emby-input" id="frameToken" type="password" autocomplete="new-password" maxlength="8192" spellcheck="false">
-                    <div class="fieldDescription">Cole um token para salvar ou substituir. O campo fica vazio após salvar.</div>
+                    <label for="frameEmail">E-mail</label>
+                    <input is="emby-input" id="frameEmail" type="email" autocomplete="username" required maxlength="254">
                 </div>
-                <button is="emby-button" type="submit" class="raised">Salvar token</button>
-                <button is="emby-button" id="frameRemoveToken" type="button">Remover token salvo</button>
-                <p id="frameTokenStatus" role="status" aria-live="polite"></p>
+                <div class="inputContainer">
+                    <label for="framePassword">Senha</label>
+                    <input is="emby-input" id="framePassword" type="password" autocomplete="current-password" required maxlength="1024">
+                </div>
+                <button is="emby-button" type="submit" class="raised">Entrar</button>
+                <button is="emby-button" type="button" id="frameSignOut">Desconectar</button>
+                <p id="frameLoginStatus" role="status" aria-live="polite"></p>
             </form>
+            <details>
+                <summary>Usar token manual</summary>
+                <form id="frameTokenForm" autocomplete="off">
+                    <div class="inputContainer">
+                        <label for="frameToken">Token da API</label>
+                        <input is="emby-input" id="frameToken" type="password" autocomplete="new-password" maxlength="8192" spellcheck="false">
+                        <div class="fieldDescription">Cole um token para salvar ou substituir. O campo fica vazio após salvar.</div>
+                    </div>
+                    <button is="emby-button" type="submit" class="raised">Salvar token</button>
+                    <button is="emby-button" id="frameRemoveToken" type="button">Remover token salvo</button>
+                    <p id="frameTokenStatus" role="status" aria-live="polite"></p>
+                </form>
+            </details>
             <h2>Buscar filmes</h2>
             <form id="frameSearchForm">
                 <div class="inputContainer">
@@ -86,6 +103,7 @@
             const id = 'bb053bff-fcf8-4e86-b3b6-83b83866063e';
             const fields = { CatalogUrl: 'Catalog', MoviesPath: 'Movies', SeriesPath: 'Series', MediaHosts: 'Hosts', BrowseApiUrl: 'BrowseUrl' };
             let savedMode = false;
+            let savedApiUrl = "";
             let currentSearch;
             let busy = false;
 
@@ -185,6 +203,53 @@
                 }
             }
 
+            async function updateAccountStatus() {
+                if (!savedMode) return;
+                try {
+                    const session = await request('Session');
+                    el('LoginStatus').textContent = session.connected ? 'Conta FILMES-JR conectada.' : '';
+                } catch {
+                    el('LoginStatus').textContent = 'Não foi possível verificar a sessão FILMES-JR.';
+                }
+            }
+
+            el('LoginForm').addEventListener('submit', async event => {
+                event.preventDefault();
+                if (el('BrowseUrl').value.trim() !== savedApiUrl) {
+                    el('LoginStatus').textContent = 'Salve a URL da API antes de entrar.';
+                    return;
+                }
+
+                const button = el('LoginForm').querySelector('button[type="submit"]');
+                button.disabled = true;
+                el('LoginStatus').textContent = 'Conectando…';
+                try {
+                    const result = await request('Session', { body: {
+                        apiUrl: savedApiUrl,
+                        email: el('Email').value.trim(),
+                        password: el('Password').value
+                    } });
+                    el('LoginStatus').textContent = result.message;
+                } catch (error) {
+                    el('LoginStatus').textContent = error.message;
+                } finally {
+                    el('Password').value = '';
+                    button.disabled = false;
+                }
+            });
+
+            el('SignOut').addEventListener('click', async () => {
+                el('SignOut').disabled = true;
+                try {
+                    const result = await request('Token', { method: 'DELETE' });
+                    el('LoginStatus').textContent = result.message;
+                } catch (error) {
+                    el('LoginStatus').textContent = error.message;
+                } finally {
+                    el('SignOut').disabled = false;
+                }
+            });
+
             async function updateToken(method) {
                 const token = el('Token').value.trim();
                 if (method === 'PUT' && !token) {
@@ -195,6 +260,7 @@
                     const result = await request('Token', { method, body: method === 'PUT' ? { token } : undefined });
                     el('Token').value = '';
                     el('TokenStatus').textContent = result.message;
+                    await updateAccountStatus();
                 } catch (error) {
                     el('TokenStatus').textContent = error.message;
                 }
@@ -214,8 +280,10 @@
                     el('Token').value = '';
                     el('TokenStatus').textContent = '';
                     savedMode = config.OnDemand === true;
+                    savedApiUrl = config.BrowseApiUrl || "";
                     el('OnDemand').checked = savedMode;
                     updateMode();
+                    await updateAccountStatus();
                 } catch {
                     Dashboard.alert('Falha ao carregar a configuração do Frame.');
                 } finally {
@@ -232,8 +300,10 @@
                     config.OnDemand = el('OnDemand').checked;
                     Dashboard.processPluginConfigurationUpdateResult(await ApiClient.updatePluginConfiguration(id, config));
                     savedMode = config.OnDemand;
+                    savedApiUrl = config.BrowseApiUrl;
                     resetResults();
                     updateMode();
+                    await updateAccountStatus();
                 } catch {
                     Dashboard.alert('Falha ao salvar a configuração do Frame.');
                 } finally {

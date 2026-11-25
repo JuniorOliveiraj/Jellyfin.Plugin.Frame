@@ -23,11 +23,11 @@ Para um build local, use `dotnet test tests/Jellyfin.Plugin.Frame.Tests -c Relea
 ## Busca e importação sob demanda
 
 1. Na página do Frame, marque **Importar filmes sob demanda** e informe a URL base HTTPS da instalação FILMES-JR. Use somente a base, sem acrescentar /browse no final. Mantenha a pasta de filmes já cadastrada na biblioteca e informe os hosts autorizados usados nas URLs de vídeo e imagens. Se a API usar gateway de mídia, inclua o host público desse gateway.
-2. Salve a configuração. Em **Token da API**, cole um JWT válido de uma conta FILMES-JR com acesso ao catálogo e clique em **Salvar token**. O valor é protegido no servidor e vinculado à URL base salva. Você também pode usar FRAME_API_TOKEN no ambiente do serviço. O plugin usa a variável quando não há token salvo no painel.
+2. Salve a configuração. Em **Conta FILMES-JR**, entre com o e-mail e a senha de uma conta com acesso ao catálogo. O Jellyfin guarda os tokens criptografados e renova a sessão quando necessário. O token manual e a variável FRAME_API_TOKEN continuam disponíveis como alternativas.
 3. Busque pelo título e clique em **Importar** no filme escolhido. O plugin consulta o detalhe, grava o STRM e o NFO e notifica o monitor do Jellyfin. Se o item demorar a aparecer, execute **Rastrear Todas as Bibliotecas**.
 4. Reproduza o filme e importe o mesmo resultado novamente para verificar que mantém a mesma pasta. O importador usa um UUID derivado do identificador externo. A tarefa de sincronização geral ignora a execução enquanto esse modo estiver ativo.
 
-Se a conta usar URLs temporárias do gateway, teste a reprodução logo após importar. O gateway FILMES-JR emite URLs com validade de oito horas quando a proteção de mídia está ativa. A renovação automática ainda está pendente. Para este teste, reimporte o filme se o URL de reprodução expirar. Se o JWT da API expirar, salve um token novo no painel ou atualize a variável de ambiente, conforme a opção usada.
+Se a conta usar URLs temporárias do gateway, teste a reprodução logo após importar. O gateway FILMES-JR emite URLs com validade de oito horas quando a proteção de mídia está ativa. A renovação automática ainda está pendente. Para este teste, reimporte o filme se o URL de reprodução expirar. Se a sessão da conta expirar, entre novamente. Se estiver usando um JWT manual e ele expirar, atualize-o no painel ou na variável de ambiente.
 
 ## Contrato experimental da sincronização geral
 
