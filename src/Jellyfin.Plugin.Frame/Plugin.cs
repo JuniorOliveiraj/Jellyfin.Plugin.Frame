@@ -8,11 +8,21 @@ namespace Jellyfin.Plugin.Frame;
 public sealed class FrameConfiguration : BasePluginConfiguration
 {
     public bool OnDemand { get; set; }
+    public bool SyncHomeMovies { get; set; }
     public string BrowseApiUrl { get; set; } = "";
     public string CatalogUrl { get; set; } = "";
     public string MoviesPath { get; set; } = "";
     public string SeriesPath { get; set; } = "";
     public string MediaHosts { get; set; } = "";
+
+    internal Uri? GetBrowseOrigin()
+    {
+        if (!OnDemand || !Uri.TryCreate(BrowseApiUrl, UriKind.Absolute, out var origin) ||
+            origin.Scheme != Uri.UriSchemeHttps || origin.UserInfo.Length != 0 ||
+            origin.Query.Length != 0 || origin.Fragment.Length != 0)
+            return null;
+        return new Uri(origin.AbsoluteUri.TrimEnd('/') + "/");
+    }
 }
 
 public sealed class Plugin : BasePlugin<FrameConfiguration>, IHasWebPages

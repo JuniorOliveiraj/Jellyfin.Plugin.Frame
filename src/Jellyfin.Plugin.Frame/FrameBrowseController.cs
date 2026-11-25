@@ -123,17 +123,10 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
     private BrowseAccountSession AccountSession(Uri origin) =>
         new(BrowseClient.SharedHttp, origin, TokenPath, protection);
 
-    private string TokenPath => Path.Combine(paths.PluginConfigurationsPath, "Jellyfin.Plugin.Frame.browse-token");
+    private string TokenPath => Path.Combine(paths.PluginConfigurationsPath, BrowseAccountSession.CredentialsFileName);
 
-    private static Uri? GetOrigin(FrameConfiguration? config = null)
-    {
-        config ??= Plugin.Instance?.Configuration;
-        if (config is not { OnDemand: true } || !Uri.TryCreate(config.BrowseApiUrl, UriKind.Absolute, out var origin) ||
-            origin.Scheme != Uri.UriSchemeHttps || origin.UserInfo.Length != 0 ||
-            origin.Query.Length != 0 || origin.Fragment.Length != 0)
-            return null;
-        return new Uri(origin.AbsoluteUri.TrimEnd('/') + "/");
-    }
+    private static Uri? GetOrigin(FrameConfiguration? config = null) =>
+        (config ?? Plugin.Instance?.Configuration)?.GetBrowseOrigin();
 
     [HttpGet("Search")]
     public async Task<IActionResult> Search([FromQuery] string term, [FromQuery] int page = 1,

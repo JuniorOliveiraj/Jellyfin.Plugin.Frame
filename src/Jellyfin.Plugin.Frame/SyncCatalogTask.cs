@@ -122,7 +122,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
     }
 
     internal static async Task Materialize(FrameItem item, FrameConfiguration config, HashSet<string> hosts,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool preserveMovieNfo = false)
     {
         if (string.Equals(item.Type, "movie", StringComparison.OrdinalIgnoreCase))
         {
@@ -133,7 +133,8 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             AddTitleMetadata(nfo, item.TitleMetadata);
             var url = PlaybackUrl(item.VideoUrl, hosts);
             var folder = OpenFolder(config.MoviesPath, "Frame-" + item.Id);
-            await Write(folder, "movie.nfo", nfo.ToString(), cancellationToken);
+            if (!preserveMovieNfo || !File.Exists(Path.Combine(folder, "movie.nfo")))
+                await Write(folder, "movie.nfo", nfo.ToString(), cancellationToken);
             await Write(folder, "movie.strm", url, cancellationToken);
             await ImportArtwork(folder, item.Images, hosts, cancellationToken);
             return;

@@ -39,7 +39,12 @@
             <div class="inputContainer" id="frameBrowseSettings">
                 <label for="frameBrowseUrl">URL base HTTPS da API FILMES-JR</label>
                 <input is="emby-input" id="frameBrowseUrl" type="url">
-
+                <div class="checkboxContainer">
+                    <label><input is="emby-checkbox" id="frameSyncHomeMovies" type="checkbox">
+                        <span>Sincronizar automaticamente os filmes da home FILMES-JR</span>
+                    </label>
+                </div>
+                <div class="fieldDescription">Execute Frame — Sincronizar filmes da home em Tarefas agendadas para testar agora.</div>
             </div>
             <div id="frameCatalogSettings">
                 <div class="inputContainer"><label for="frameCatalog">URL HTTPS de listagem</label><input is="emby-input" id="frameCatalog" type="url"></div>
@@ -285,6 +290,7 @@
                     savedMode = config.OnDemand === true;
                     savedApiUrl = config.BrowseApiUrl || "";
                     el('OnDemand').checked = savedMode;
+                    el('SyncHomeMovies').checked = config.SyncHomeMovies === true;
                     updateMode();
                     await updateAccountStatus();
                 } catch {
@@ -301,6 +307,7 @@
                     const config = await ApiClient.getPluginConfiguration(id);
                     for (const [key, field] of Object.entries(fields)) config[key] = el(field).value.trim();
                     config.OnDemand = el('OnDemand').checked;
+                    config.SyncHomeMovies = el('SyncHomeMovies').checked;
                     Dashboard.processPluginConfigurationUpdateResult(await ApiClient.updatePluginConfiguration(id, config));
                     savedMode = config.OnDemand;
                     savedApiUrl = config.BrowseApiUrl;

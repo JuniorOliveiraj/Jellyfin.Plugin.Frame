@@ -12,6 +12,7 @@ internal sealed record BrowseAuthTokens(string AccessToken, DateTimeOffset Expir
 internal sealed class BrowseAccountSession(HttpClient http, Uri origin, string path, IDataProtectionProvider protection)
 {
     private const string SessionPrefix = "session-v1\n";
+    internal const string CredentialsFileName = "Jellyfin.Plugin.Frame.browse-token";
     internal static readonly SemaphoreSlim Gate = new(1);
 
     internal async Task SignIn(string email, string password, CancellationToken ct)
