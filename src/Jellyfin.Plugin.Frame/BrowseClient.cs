@@ -12,15 +12,19 @@ internal sealed record BrowsePage(BrowseTitle[] Items);
 internal sealed record BrowseHome(BrowseTitle? Hero, BrowseHomeRow[]? Rows, bool Partial);
 internal sealed record BrowseHomeRow(BrowseHomeItem[]? Items);
 internal sealed record BrowseHomeItem(BrowseTitle Item, Guid? PersistedTitleId);
-internal sealed record PersistedBrowseMovie(Guid Id, string Type, string? ExternalId, string Name, int Year,
-    double? Rating, string? Description, string[]? Genres, int? DurationMinutes, string? VideoUrl, FrameImages? Images);
+internal sealed record PersistedBrowseTitle(Guid Id, string Type, string? ExternalId, string Name, int Year,
+    double? Rating, string? Description, string[]? Genres, int? DurationMinutes, string? VideoUrl,
+    FrameImages? Images, BrowseSeason[]? Seasons);
 internal sealed record BrowseDetail(bool IsSeries, BrowseMovie? Movie, BrowseSeries? Series);
 internal sealed record BrowseMovie(string ExternalId, string Name, int Year, double? Rating, string? Description,
     string[]? GenreNames, int? DurationMinutes, string? VideoUrl, FrameImages? Images);
 internal sealed record BrowseSeries(string ExternalId, string Name, int Year, double? Rating, string? Description,
     string[]? GenreNames, FrameImages? Images, BrowseSeason[]? Seasons);
 internal sealed record BrowseSeason(int Number, BrowseEpisode[]? Episodes);
-internal sealed record BrowseEpisode(int Number, string? Name, string? VideoUrl, int? DurationMinutes);
+internal sealed record BrowseEpisode(int Number, string? Name, string? VideoUrl, int? DurationMinutes, string? BackupVideoUrl)
+{
+    internal string? PlaybackUrl => string.IsNullOrWhiteSpace(VideoUrl) ? BackupVideoUrl : VideoUrl;
+}
 
 public sealed record FrameSearchResult(
     [property: JsonPropertyName("externalId")] string ExternalId,
@@ -79,32 +83,56 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
     internal async Task<BrowseHome> GetHome(CancellationToken ct) =>
         await Read<BrowseHome>("home", ct) ?? throw new InvalidDataException("Resposta da home vazia.");
 
-    internal async Task<FrameItem?> GetHomeMovie(BrowseHomeItem card, CancellationToken ct)
+    internal async Task<FrameItem?> GetHomeTitle(BrowseHomeItem card, CancellationToken ct)
     {
         var externalId = card.Item.ExternalId;
+        var isSeries = card.Item.IsSeries;
         var path = IsValidId(externalId) ? "browse/titles/" + Uri.EscapeDataString(externalId) : null;
         if (path is not null &&
-            GetPlayableMovie(await Read<BrowseDetail>(path, ct, allowMissing: true), externalId) is { } movie)
-            return MapMovie(movie);
+            MapLiveHomeTitle(await Read<BrowseDetail>(path, ct, allowMissing: true), externalId, isSeries) is { } live)
+            return live;
 
         if (card.PersistedTitleId is Guid localId)
         {
-            var persisted = await Read<PersistedBrowseMovie>($"catalog/titles/{localId:D}", ct, allowMissing: true);
+            var persisted = await Read<PersistedBrowseTitle>($"catalog/titles/{localId:D}", ct, allowMissing: true);
             if (persisted is not null && persisted.Id == localId &&
-                string.Equals(persisted.Type, "movie", StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(persisted.VideoUrl))
+                string.Equals(persisted.Type, isSeries ? "series" : "movie", StringComparison.OrdinalIgnoreCase))
             {
                 var identity = IsValidId(persisted.ExternalId) ? persisted.ExternalId! : localId.ToString("D");
-                return MapMovie(new(identity, persisted.Name, persisted.Year, persisted.Rating, persisted.Description,
-                    persisted.Genres, persisted.DurationMinutes, persisted.VideoUrl, persisted.Images));
+                if (isSeries)
+                {
+                    var series = MapSeries(new(identity, persisted.Name, persisted.Year, persisted.Rating,
+                        persisted.Description, persisted.Genres, persisted.Images, persisted.Seasons), allEpisodes: true);
+                    if (HasEpisodeLinks(series))
+                        return series;
+                }
+                else if (!string.IsNullOrWhiteSpace(persisted.VideoUrl))
+                {
+                    return MapMovie(new(identity, persisted.Name, persisted.Year, persisted.Rating, persisted.Description,
+                        persisted.Genres, persisted.DurationMinutes, persisted.VideoUrl, persisted.Images));
+                }
             }
         }
         if (path is null || string.IsNullOrWhiteSpace(card.Item.Name))
             return null;
-        var selection = new FrameImportRequest(card.Item.Name, 1, externalId, IsSeries: false);
-        var refreshed = GetPlayableMovie(await ReloadTitleFromSearch(selection, path, ct), externalId);
-        return refreshed is null ? null : MapMovie(refreshed);
+        var selection = new FrameImportRequest(card.Item.Name, 1, externalId, IsSeries: isSeries);
+        return MapLiveHomeTitle(await ReloadTitleFromSearch(selection, path, ct), externalId, isSeries);
     }
+
+    private static FrameItem? MapLiveHomeTitle(BrowseDetail? detail, string externalId, bool isSeries)
+    {
+        if (isSeries && detail is { IsSeries: true, Series: { } series } && series.ExternalId == externalId)
+        {
+            var item = MapSeries(series, allEpisodes: true);
+            return HasEpisodeLinks(item) ? item : null;
+        }
+
+        return !isSeries && detail is { IsSeries: false, Movie: { } movie } &&
+            movie.ExternalId == externalId && !string.IsNullOrWhiteSpace(movie.VideoUrl) ? MapMovie(movie) : null;
+    }
+
+    private static bool HasEpisodeLinks(FrameItem series) =>
+        (series.Seasons ?? []).Any(season => (season.Episodes ?? []).Any(episode => !string.IsNullOrWhiteSpace(episode.VideoUrl)));
 
     private async Task<BrowseDetail?> ReloadTitleFromSearch(FrameImportRequest selection, string path, CancellationToken ct)
     {
@@ -116,39 +144,47 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
         return await Read<BrowseDetail>(path, ct, allowMissing: true);
     }
 
-    private static BrowseMovie? GetPlayableMovie(BrowseDetail? detail, string externalId) =>
-        detail is { IsSeries: false, Movie: { } movie } && movie.ExternalId == externalId &&
-        !string.IsNullOrWhiteSpace(movie.VideoUrl) ? movie : null;
-
     private static FrameItem MapMovie(BrowseMovie movie) =>
         new(StableId("movie:" + movie.ExternalId), movie.Name, "movie",
             movie.Year > 0 ? movie.Year : null, movie.Rating, movie.Description, movie.GenreNames,
             movie.DurationMinutes, movie.VideoUrl, movie.Images, null);
 
-    private static FrameItem MapSeries(BrowseSeries series)
+    private static FrameItem MapSeries(BrowseSeries series, bool allEpisodes = false)
     {
-        // The trial imports the earliest episode with a playback URL, preferring regular seasons.
-        var selected = (series.Seasons ?? [])
+        var seasons = (series.Seasons ?? [])
             .Where(season => season is { Number: >= 0 })
-            .OrderBy(season => season.Number == 0)
-            .ThenBy(season => season.Number)
-            .SelectMany(season => (season.Episodes ?? [])
-                .Where(episode => episode is { Number: > 0 } && !string.IsNullOrWhiteSpace(episode.VideoUrl))
-                .OrderBy(episode => episode.Number)
-                .Select(episode => (Season: season.Number, Episode: episode)))
-            .FirstOrDefault();
+            .GroupBy(season => season.Number)
+            .OrderBy(group => group.Key == 0)
+            .ThenBy(group => group.Key)
+            .Select(group => new FrameSeason(group.Key, group.SelectMany(season => season.Episodes ?? [])
+                .Where(episode => episode is { Number: > 0 })
+                .GroupBy(episode => episode.Number)
+                .OrderBy(episodes => episodes.Key)
+                .Select(episodes => episodes.FirstOrDefault(episode => !string.IsNullOrWhiteSpace(episode.PlaybackUrl))
+                    ?? episodes.First())
+                .Select(episode => MapEpisode(series.ExternalId, group.Key, episode))
+                .ToArray()))
+            .Where(season => season.Episodes!.Length > 0)
+            .ToArray();
 
-        FrameSeason[] seasons = [];
-        if (selected.Episode is { } selectedEpisode)
+        if (!allEpisodes)
         {
-            var key = FormattableString.Invariant($"episode:{series.ExternalId}:{selected.Season}:{selectedEpisode.Number}");
-            var name = string.IsNullOrWhiteSpace(selectedEpisode.Name) ? $"Episódio {selectedEpisode.Number}" : selectedEpisode.Name;
-            seasons = [new(selected.Season,
-                [new(StableId(key), selectedEpisode.Number, name, null, selectedEpisode.DurationMinutes, selectedEpisode.VideoUrl)])];
+            var first = seasons.SelectMany(season => season.Episodes!
+                .Select(episode => (Season: season.Number, Episode: episode)))
+                .FirstOrDefault(entry => !string.IsNullOrWhiteSpace(entry.Episode.VideoUrl));
+            seasons = first.Episode is { } episode ? [new(first.Season, [episode])] : [];
         }
+
         return new(StableId("series:" + series.ExternalId), series.Name, "series",
             series.Year > 0 ? series.Year : null, series.Rating, series.Description, series.GenreNames,
             null, null, series.Images, seasons);
+    }
+
+    private static FrameEpisode MapEpisode(string seriesId, int seasonNumber, BrowseEpisode episode)
+    {
+        var key = FormattableString.Invariant($"episode:{seriesId}:{seasonNumber}:{episode.Number}");
+        var name = string.IsNullOrWhiteSpace(episode.Name) ? $"Episódio {episode.Number}" : episode.Name;
+        return new(StableId(key), episode.Number, name, null, episode.DurationMinutes, episode.PlaybackUrl);
     }
 
     private static Guid StableId(string key)

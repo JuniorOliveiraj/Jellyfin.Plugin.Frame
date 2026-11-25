@@ -30,11 +30,13 @@ Para um build local, use `dotnet test tests/Jellyfin.Plugin.Frame.Tests -c Relea
 
 Se a conta usar URLs temporárias do gateway, teste a reprodução logo após importar. O gateway FILMES-JR emite URLs com validade de oito horas quando a proteção de mídia está ativa. A renovação automática ainda está pendente. Para este teste, reimporte o filme se o URL de reprodução expirar. Se a sessão da conta expirar, entre novamente. Se estiver usando um JWT manual e ele expirar, atualize-o no painel ou na variável de ambiente.
 
-## Sincronização dos filmes da home
+## Sincronização de filmes e séries da home
 
 Ative **Sincronizar automaticamente os filmes da home FILMES-JR** no painel do Frame, mantenha o modo sob demanda e salve. Use uma conta FILMES-JR conectada, uma pasta de filmes cadastrada como biblioteca do Jellyfin e os hosts de reprodução permitidos.
 
-Execute **Frame — Sincronizar filmes da home** nas tarefas do Jellyfin para a primeira execução. O intervalo padrão é de 30 minutos e pode ser ajustado na tarefa. A sincronização consulta /home, importa os filmes do destaque e das listas da conta e atualiza suas referências de reprodução. Filmes que saem da home permanecem na biblioteca. Séries podem continuar sendo importadas sob demanda pelo botão de teste do primeiro episódio.
+Execute **Frame — Sincronizar filmes da home** nas tarefas do Jellyfin para a primeira execução. O intervalo padrão é de 30 minutos e pode ser ajustado na tarefa. A sincronização consulta /home, importa os filmes do destaque e das listas da conta e atualiza suas referências de reprodução. Filmes que saem da home permanecem na biblioteca.
+
+Para séries, ative **Sincronizar automaticamente as séries da home FILMES-JR e todos os episódios**, mantenha a pasta de séries separada e execute **Frame — Sincronizar séries da home**. A tarefa inclui todas as temporadas e os episódios disponíveis, incluindo especiais. Uma origem de vídeo bloqueada deixa apenas os episódios afetados pendentes para uma nova execução.
 
 Cada filme autorizado é escrito na mesma pasta da importação manual. A tarefa preenche imagens locais ausentes quando disponíveis e mantém NFOs já existentes. Títulos indisponíveis ou com origem de mídia bloqueada ficam pendentes e são registrados individualmente.
 

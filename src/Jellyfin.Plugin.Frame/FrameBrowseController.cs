@@ -157,7 +157,7 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                     ? "Salve a pasta absoluta dedicada a séries antes de importar."
                     : "Salve a pasta absoluta de filmes." });
             if (isSeries && Path.IsPathFullyQualified(config.MoviesPath) &&
-                (ContainsPath(config.MoviesPath, mediaPath) || ContainsPath(mediaPath, config.MoviesPath)))
+                (HomeSync.ContainsPath(config.MoviesPath, mediaPath) || HomeSync.ContainsPath(mediaPath, config.MoviesPath)))
                 return BadRequest(new { message = "Use pastas separadas para filmes e séries, sem colocar uma dentro da outra." });
 
             var season = item.Seasons?.SingleOrDefault();
@@ -241,13 +241,6 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 : "Filme importado. Aguarde a atualização da biblioteca.";
             return Ok(new { message = message + artworkWarning });
         }, ct);
-    }
-
-    private static bool ContainsPath(string root, string path)
-    {
-        var relative = Path.GetRelativePath(root, path);
-        return !Path.IsPathRooted(relative) && relative != ".." &&
-            !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     private async Task<IActionResult> Run(Func<BrowseClient, FrameConfiguration, Task<IActionResult>> action,

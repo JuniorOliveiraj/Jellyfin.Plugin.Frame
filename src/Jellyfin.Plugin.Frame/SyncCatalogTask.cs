@@ -121,8 +121,8 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         throw new InvalidDataException("Limite de páginas atingido.");
     }
 
-    internal static async Task Materialize(FrameItem item, FrameConfiguration config, HashSet<string> hosts,
-        CancellationToken cancellationToken, bool preserveMovieNfo = false)
+    internal static async Task<bool> Materialize(FrameItem item, FrameConfiguration config, HashSet<string> hosts,
+        CancellationToken cancellationToken, bool preserveExistingNfo = false)
     {
         if (string.Equals(item.Type, "movie", StringComparison.OrdinalIgnoreCase))
         {
@@ -133,16 +133,15 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             AddTitleMetadata(nfo, item.TitleMetadata);
             var url = PlaybackUrl(item.VideoUrl, hosts);
             var folder = OpenFolder(config.MoviesPath, "Frame-" + item.Id);
-            if (!preserveMovieNfo || !File.Exists(Path.Combine(folder, "movie.nfo")))
-                await Write(folder, "movie.nfo", nfo.ToString(), cancellationToken);
-            await Write(folder, "movie.strm", url, cancellationToken);
+            var movieChanged = await WriteNfo(folder, "movie.nfo", nfo, preserveExistingNfo, cancellationToken);
+            movieChanged |= await Write(folder, "movie.strm", url, cancellationToken);
             await ImportArtwork(folder, item.Images, hosts, cancellationToken);
-            return;
+            return movieChanged;
         }
 
         if (!string.Equals(item.Type, "series", StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(config.SeriesPath))
-            return;
+            return false;
 
         var show = Metadata("tvshow", item.Id, item.Name, item.Description, null);
         show.Add(item.Year is int startYear ? new XElement("year", startYear) : null,
@@ -169,14 +168,15 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             }
         }
         var series = OpenFolder(config.SeriesPath, "Frame-" + item.Id);
-        await Write(series, "tvshow.nfo", show.ToString(), cancellationToken);
+        var changed = await WriteNfo(series, "tvshow.nfo", show, preserveExistingNfo, cancellationToken);
         foreach (var episode in episodes)
         {
             var folder = OpenFolder(series, SeasonFolderName(episode.Season));
-            await Write(folder, episode.Name + ".nfo", episode.Nfo.ToString(), cancellationToken);
-            await Write(folder, episode.Name + ".strm", episode.Url, cancellationToken);
+            changed |= await WriteNfo(folder, episode.Name + ".nfo", episode.Nfo, preserveExistingNfo, cancellationToken);
+            changed |= await Write(folder, episode.Name + ".strm", episode.Url, cancellationToken);
         }
         await ImportArtwork(series, item.Images, hosts, cancellationToken);
+        return changed;
     }
 
     internal static string EpisodeFileName(int season, int episode) => FormattableString.Invariant($"S{season:D2}E{episode:D2}");
@@ -330,10 +330,20 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             throw new IOException("Links não são permitidos na biblioteca gerenciada.");
     }
 
-    private static Task Write(string folder, string name, string content, CancellationToken cancellationToken) =>
+    private static Task<bool> WriteNfo(string folder, string name, XElement content, bool preserve,
+        CancellationToken cancellationToken)
+    {
+        var target = new FileInfo(Path.Combine(folder, name));
+        RejectLink(target);
+        return preserve && target.Exists
+            ? Task.FromResult(false)
+            : Write(folder, name, content.ToString(), cancellationToken);
+    }
+
+    private static Task<bool> Write(string folder, string name, string content, CancellationToken cancellationToken) =>
         WriteBytes(folder, name, System.Text.Encoding.UTF8.GetBytes(content + "\n"), cancellationToken);
 
-    private static async Task WriteBytes(string folder, string name, byte[] content, CancellationToken cancellationToken)
+    private static async Task<bool> WriteBytes(string folder, string name, byte[] content, CancellationToken cancellationToken)
     {
         var path = Path.Combine(folder, name);
         RejectLink(new FileInfo(path));
@@ -341,13 +351,14 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         {
             var previous = await File.ReadAllBytesAsync(path, cancellationToken);
             if (previous.AsSpan().SequenceEqual(content))
-                return;
+                return false;
         }
         var temp = Path.Combine(folder, $".frame-{Guid.NewGuid():N}.tmp");
         try
         {
             await File.WriteAllBytesAsync(temp, content, cancellationToken);
             File.Move(temp, path, overwrite: true);
+            return true;
         }
         finally
         {

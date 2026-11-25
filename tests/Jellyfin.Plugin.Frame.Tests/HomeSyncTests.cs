@@ -102,9 +102,79 @@ public sealed class HomeSyncTests
             };
         }));
         var client = new BrowseClient(http, new Uri("https://frame.example/"), "test-token");
-        var movie = await client.GetHomeMovie(new(new("123", "Filme", 2024, false), null), default);
+        var movie = await client.GetHomeTitle(new(new("123", "Filme", 2024, false), null), default);
         Assert.Equal("https://media.example.org/example.mp4", movie?.VideoUrl);
         Assert.Equal(["/browse/titles/123", "/browse/search/Filme?page=1", "/browse/titles/123"], requests);
+    }
+    [Fact]
+    public async Task HomeSeriesAddsAllSeasonsAndKeepsExistingPilotEpisodeAndMetadata()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var moviesPath = Path.Combine(root, "movies");
+        var seriesPath = Path.Combine(root, "series");
+        var config = new FrameConfiguration { MoviesPath = moviesPath, SeriesPath = seriesPath, MediaHosts = "media.example.org" };
+        const string detail = """
+            {"isSeries":true,"series":{"externalId":"601","name":"Série da home","year":2024,
+             "seasons":[
+               {"number":0,"episodes":[{"number":1,"name":"Especial","videoUrl":"https://media.example.org/special.mp4"}]},
+               {"number":1,"episodes":[
+                 {"number":1,"name":"Piloto","videoUrl":"https://media.example.org/101.mp4"},
+                 {"number":2,"name":"Segundo","backupVideoUrl":"http://video.example.org:8080/102.mp4"}
+               ]},
+               {"number":2,"episodes":[{"number":1,"name":"Terceiro","videoUrl":"https://media.example.org/201.mp4"}]}
+             ]}}
+            """;
+        using var http = new HttpClient(new FakeHomeApi(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/home" => Json("""
+                {"hero":{"externalId":"601","name":"Série da home","isSeries":true},
+                 "rows":[{"items":[{"item":{"externalId":"601","name":"Série da home","isSeries":true}},
+                 {"item":{"externalId":"111","name":"Filme","isSeries":false}}]}]}
+                """),
+            "/browse/titles/601" => Json(detail),
+            "/browse/titles/601/metadata" => new(HttpStatusCode.NoContent),
+            _ => throw new InvalidOperationException("Apenas o detalhe da série deve ser consultado.")
+        }));
+        var client = new BrowseClient(http, new Uri("https://example.org/"), "test-token");
+        var notified = new List<string>();
+        try
+        {
+            var pilot = Assert.IsType<FrameItem>(await client.GetTitleForImport(new("Série da home", 1, "601", true), default));
+            await SyncCatalogTask.Materialize(pilot, config, SyncCatalogTask.ReadMediaAllowlist(config.MediaHosts), default);
+            var folder = Assert.Single(Directory.GetDirectories(seriesPath));
+            var nfo = Path.Combine(folder, "tvshow.nfo");
+            const string identified = "<tvshow><title>Série identificada</title><tmdbid>42</tmdbid></tvshow>";
+            await File.WriteAllTextAsync(nfo, identified);
+
+            Task Sync() => SyncHomeSeriesTask.ImportHome(client, config, () => true, notified.Add,
+                NullLogger.Instance, new Progress<double>(), default);
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(Sync);
+            Assert.Contains("http://video.example.org:8080", error.Message);
+            Assert.Equal(3, Directory.GetFiles(folder, "*.strm", SearchOption.AllDirectories).Length);
+            Assert.Equal(folder, Assert.Single(notified));
+            Assert.Equal(identified, await File.ReadAllTextAsync(nfo));
+
+            notified.Clear();
+            config.MediaHosts += ", http://video.example.org:8080";
+            await Sync();
+            Assert.Equal(folder, Assert.Single(Directory.GetDirectories(seriesPath)));
+            Assert.Equal(4, Directory.GetFiles(folder, "*.strm", SearchOption.AllDirectories).Length);
+            Assert.True(File.Exists(Path.Combine(folder, "Season 00", "S00E01.strm")));
+            Assert.True(File.Exists(Path.Combine(folder, "Season 01", "S01E02.strm")));
+            Assert.True(File.Exists(Path.Combine(folder, "Season 02", "S02E01.strm")));
+            Assert.False(Directory.Exists(moviesPath));
+            Assert.Equal(folder, Assert.Single(notified));
+
+            notified.Clear();
+            await Sync();
+            Assert.Empty(notified);
+            Assert.Equal(4, Directory.GetFiles(folder, "*.strm", SearchOption.AllDirectories).Length);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
     private static HttpResponseMessage Json(string content) => new(HttpStatusCode.OK)
     {

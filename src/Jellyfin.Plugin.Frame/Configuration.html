@@ -44,7 +44,12 @@
                         <span>Sincronizar automaticamente os filmes da home FILMES-JR</span>
                     </label>
                 </div>
-                <div class="fieldDescription">Execute Frame — Sincronizar filmes da home em Tarefas agendadas para testar agora.</div>
+                <div class="checkboxContainer">
+                    <label><input is="emby-checkbox" id="frameSyncHomeSeries" type="checkbox">
+                        <span>Sincronizar automaticamente as séries da home FILMES-JR e todos os episódios</span>
+                    </label>
+                </div>
+                <div class="fieldDescription">Execute a tarefa de filmes ou a de séries da home em Tarefas agendadas para testar agora.</div>
             </div>
             <div id="frameCatalogSettings">
                 <div class="inputContainer"><label for="frameCatalog">URL HTTPS de listagem</label><input is="emby-input" id="frameCatalog" type="url"></div>
@@ -291,6 +296,7 @@
                     savedApiUrl = config.BrowseApiUrl || "";
                     el('OnDemand').checked = savedMode;
                     el('SyncHomeMovies').checked = config.SyncHomeMovies === true;
+                    el('SyncHomeSeries').checked = config.SyncHomeSeries === true;
                     updateMode();
                     await updateAccountStatus();
                 } catch {
@@ -308,6 +314,7 @@
                     for (const [key, field] of Object.entries(fields)) config[key] = el(field).value.trim();
                     config.OnDemand = el('OnDemand').checked;
                     config.SyncHomeMovies = el('SyncHomeMovies').checked;
+                    config.SyncHomeSeries = el('SyncHomeSeries').checked;
                     Dashboard.processPluginConfigurationUpdateResult(await ApiClient.updatePluginConfiguration(id, config));
                     savedMode = config.OnDemand;
                     savedApiUrl = config.BrowseApiUrl;
