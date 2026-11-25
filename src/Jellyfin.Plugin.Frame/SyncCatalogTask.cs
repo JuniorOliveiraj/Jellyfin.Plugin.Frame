@@ -38,8 +38,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
                 return;
 
             var catalog = ParseHttps(config.CatalogUrl);
-            var hosts = config.MediaHosts.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var hosts = ReadMediaAllowlist(config.MediaHosts);
             if (hosts.Count == 0 || !Path.IsPathFullyQualified(config.MoviesPath))
                 throw new InvalidDataException("Configure a pasta absoluta de filmes e os hosts de mídia.");
             if (!string.IsNullOrWhiteSpace(config.SeriesPath) &&
@@ -131,7 +130,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             nfo.Add(item.Year is int year ? new XElement("year", year) : null,
                 item.Rating is double rating ? new XElement("rating", rating) : null,
                 (item.Genres ?? []).Select(genre => new XElement("genre", genre)));
-            var url = MediaUrl(item.VideoUrl, hosts);
+            var url = PlaybackUrl(item.VideoUrl, hosts);
             var folder = OpenFolder(config.MoviesPath, "Frame-" + item.Id);
             await Write(folder, "movie.nfo", nfo.ToString(), cancellationToken);
             await Write(folder, "movie.strm", url, cancellationToken);
@@ -160,7 +159,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
                 var nfo = Metadata("episodedetails", episode.Id, episode.Name, episode.Description, episode.DurationMinutes);
                 nfo.Add(new XElement("season", season.Number), new XElement("episode", episode.Number));
                 episodes.Add((season.Number, $"S{season.Number:D2}E{episode.Number:D2}",
-                    MediaUrl(episode.VideoUrl, hosts), nfo));
+                    PlaybackUrl(episode.VideoUrl, hosts), nfo));
             }
         }
         var series = OpenFolder(config.SeriesPath, "Frame-" + item.Id);
@@ -206,31 +205,59 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             duration is int minutes ? new XElement("runtime", minutes) : null);
     }
 
-    private static Uri ParseHttps(string? value)
+    private static Uri ParseHttps(string? value) =>
+        ParseWebUrl(value) is { Scheme: "https" } uri ? uri : throw new InvalidDataException("URL HTTPS inválida.");
+
+    private static Uri? ParseWebUrl(string? value)
     {
         if (value is null || value.Any(char.IsControl) || !Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttps || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0)
-            throw new InvalidDataException("URL HTTPS inválida.");
+            uri.Scheme is not ("https" or "http") || uri.Host.Length == 0 ||
+            uri.UserInfo.Length != 0 || uri.Fragment.Length != 0)
+            return null;
         return uri;
     }
 
-    internal static bool MediaUrlAllowed(string? value, HashSet<string> hosts)
+    internal static HashSet<string> ReadMediaAllowlist(string entries)
     {
-        try
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
         {
-            _ = MediaUrl(value, hosts);
-            return true;
+            if (Uri.CheckHostName(entry) != UriHostNameType.Unknown)
+                allowed.Add(entry);
+            else if (ParseWebUrl(entry) is { Scheme: "http", AbsolutePath: "/", Query.Length: 0 } origin)
+                allowed.Add(origin.GetLeftPart(UriPartial.Authority));
         }
-        catch (InvalidDataException)
-        {
-            return false;
-        }
+        return allowed;
     }
+
+    internal static string PlaybackUrl(string? value, HashSet<string> allowed)
+    {
+        var uri = ParseWebUrl(value) ?? throw new InvalidDataException("A API devolveu uma URL de vídeo inválida.");
+        var origin = uri.GetLeftPart(UriPartial.Authority);
+        if (uri.Scheme == Uri.UriSchemeHttp)
+        {
+            if (!allowed.Contains(origin))
+                throw new InvalidDataException($"Para permitir este vídeo HTTP, adicione {origin} em Hosts de mídia permitidos.");
+        }
+        else if (!IsAllowedHttpsMedia(uri, allowed))
+        {
+            throw new InvalidDataException(uri.IsDefaultPort
+                ? $"Adicione {uri.IdnHost} em Hosts de mídia permitidos."
+                : "A URL HTTPS de vídeo precisa usar a porta padrão.");
+        }
+        return uri.AbsoluteUri;
+    }
+
+    internal static bool MediaUrlAllowed(string? value, HashSet<string> hosts) =>
+        ParseWebUrl(value) is { } uri && IsAllowedHttpsMedia(uri, hosts);
+
+    private static bool IsAllowedHttpsMedia(Uri uri, HashSet<string> hosts) =>
+        uri.Scheme == Uri.UriSchemeHttps && uri.IsDefaultPort && hosts.Contains(uri.IdnHost);
 
     private static string MediaUrl(string? value, HashSet<string> hosts)
     {
         var uri = ParseHttps(value);
-        if (!hosts.Contains(uri.IdnHost) || !uri.IsDefaultPort)
+        if (!IsAllowedHttpsMedia(uri, hosts))
             throw new InvalidDataException("Origem de mídia não permitida.");
         return uri.AbsoluteUri;
     }

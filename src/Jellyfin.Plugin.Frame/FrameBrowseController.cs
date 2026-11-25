@@ -153,18 +153,23 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
 
         return await Run(async (client, config) =>
         {
-            var hosts = config.MediaHosts.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            if (hosts.Count == 0 || !Path.IsPathFullyQualified(config.MoviesPath))
-                return BadRequest(new { message = "Salve a pasta absoluta de filmes e os hosts de mídia permitidos." });
+            var hosts = SyncCatalogTask.ReadMediaAllowlist(config.MediaHosts);
+            if (!Path.IsPathFullyQualified(config.MoviesPath))
+                return BadRequest(new { message = "Salve a pasta absoluta de filmes." });
 
             var movie = await client.GetMovie(selection, ct);
             if (movie is null)
                 return NotFound(new { message = "Filme indisponível. Faça uma nova busca." });
             if (string.IsNullOrWhiteSpace(movie.VideoUrl))
                 return UnprocessableEntity(new { message = "A API não retornou uma URL de vídeo para este filme." });
-            if (!SyncCatalogTask.MediaUrlAllowed(movie.VideoUrl, hosts))
-                return UnprocessableEntity(new { message = "A URL de vídeo precisa usar HTTPS e um host de mídia permitido." });
+            try
+            {
+                _ = SyncCatalogTask.PlaybackUrl(movie.VideoUrl, hosts);
+            }
+            catch (InvalidDataException ex)
+            {
+                return UnprocessableEntity(new { message = ex.Message });
+            }
 
             string? artworkWarning = null;
             var images = movie.Images is null ? null : new FrameImages(

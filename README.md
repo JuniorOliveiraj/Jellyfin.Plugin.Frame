@@ -22,7 +22,7 @@ Para um build local, use `dotnet test tests/Jellyfin.Plugin.Frame.Tests -c Relea
 
 ## Busca e importação sob demanda
 
-1. Na página do Frame, marque **Importar filmes sob demanda** e informe a URL base HTTPS da instalação FILMES-JR. Use somente a base, sem acrescentar /browse no final. Mantenha a pasta de filmes já cadastrada na biblioteca e informe os hosts autorizados usados nas URLs de vídeo e imagens. Se a API usar gateway de mídia, inclua o host público desse gateway.
+1. Na página do Frame, marque **Importar filmes sob demanda** e informe a URL base HTTPS da instalação FILMES-JR. Use somente a base, sem acrescentar /browse no final. Mantenha a pasta de filmes já cadastrada na biblioteca e informe os hosts autorizados usados nas URLs de vídeo e imagens. Se a API usar gateway de mídia HTTPS, inclua o domínio público desse gateway. Para permitir vídeo HTTP de uma origem conhecida, informe explicitamente http://dominio:porta no mesmo campo. A autorização vale somente para vídeo e exige correspondência de domínio e porta.
 2. Salve a configuração. Em **Conta FILMES-JR**, entre com o e-mail e a senha de uma conta com acesso ao catálogo. O Jellyfin guarda os tokens criptografados e renova a sessão quando necessário. O token manual e a variável FRAME_API_TOKEN continuam disponíveis como alternativas.
 3. Busque pelo título e clique em **Importar** no filme escolhido. O plugin consulta o detalhe, grava o STRM e o NFO e notifica o monitor do Jellyfin. Se o item demorar a aparecer, execute **Rastrear Todas as Bibliotecas**.
 4. Reproduza o filme e importe o mesmo resultado novamente para verificar que mantém a mesma pasta. O importador usa um UUID derivado do identificador externo. A tarefa de sincronização geral ignora a execução enquanto esse modo estiver ativo.
@@ -36,6 +36,6 @@ A URL configurada deve retornar `{ "items": [...], "nextCursor": null }`. Se hou
 - Filmes com `type: "movie"` usam UUID em `id`, `name`, `videoUrl` e os campos opcionais `description`, `year`, `rating`, `durationMinutes` e `genres`.
 - Séries com `type: "series"` usam UUID em `id`, `name` e `seasons`. Cada temporada tem `number` e `episodes`. Cada episódio tem UUID em `id`, `number`, `name`, `videoUrl` e, opcionalmente, `description` e `durationMinutes`.
 - Filmes e séries podem fornecer images com posterUrl, backdropUrl e logoUrl. A origem precisa constar nos hosts de mídia e servir PNG ou JPEG sem redirecionamentos.
-- Use referências HTTPS estáveis e autorizadas que o Jellyfin possa abrir diretamente. As URLs são gravadas nos STRM. Cadastre somente origens de mídia confiáveis.
+- Use referências de vídeo estáveis e autorizadas que o Jellyfin possa abrir diretamente. URLs HTTP exigem autorização explícita da origem. As URLs são gravadas nos STRM. Cadastre somente origens de mídia confiáveis.
 
 A tarefa consulta o catálogo completo e só regrava arquivos com conteúdo alterado. Itens removidos do catálogo permanecem no disco. O cursor de alterações e a renovação automática das URLs de reprodução ainda estão pendentes.

@@ -7,6 +7,42 @@ namespace Jellyfin.Plugin.Frame.Tests;
 public sealed class CatalogTests
 {
     [Fact]
+    public async Task ImportsHttpVideoOnlyWhenItsExactOriginIsAllowed()
+    {
+        const string url = "http://media.example.org:8080/clip.mp4?reference=sample";
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var config = new FrameConfiguration { MoviesPath = root };
+        var movie = new FrameItem(Guid.NewGuid(), "Teste HTTP", "movie", null, null, null, null, null, url, null, null);
+        try
+        {
+            var hostsOnly = SyncCatalogTask.ReadMediaAllowlist("media.example.org, http://media.example.org:8081");
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                SyncCatalogTask.Materialize(movie, config, hostsOnly, default));
+            Assert.Contains("http://media.example.org:8080", error.Message);
+            Assert.DoesNotContain("clip.mp4", error.Message);
+            Assert.DoesNotContain("reference", error.Message);
+            Assert.False(Directory.Exists(root));
+
+            var allowed = SyncCatalogTask.ReadMediaAllowlist("media.example.org, http://media.example.org:8080/");
+            await SyncCatalogTask.Materialize(movie, config, allowed, default);
+            var file = Assert.Single(Directory.GetFiles(root, "*.strm", SearchOption.AllDirectories));
+            Assert.Equal(url + "\n", await File.ReadAllTextAsync(file));
+
+            Assert.False(SyncCatalogTask.MediaUrlAllowed(url, allowed));
+            Assert.True(SyncCatalogTask.MediaUrlAllowed("https://media.example.org/poster.jpg", allowed));
+            Assert.Throws<InvalidDataException>(() =>
+                SyncCatalogTask.PlaybackUrl("http://example-user@example.org/clip.mp4", allowed));
+            var defaultPort = SyncCatalogTask.ReadMediaAllowlist("http://media.example.org:80");
+            Assert.Equal("http://media.example.org/clip.mp4",
+                SyncCatalogTask.PlaybackUrl("http://media.example.org/clip.mp4", defaultPort));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+    [Fact]
     public async Task ImportsOneMovieAndKeepsItsPathOnTitleChange()
     {
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

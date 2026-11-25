@@ -47,7 +47,9 @@
                 <p>Execute Frame — Sincronizar catálogo nas tarefas agendadas.</p>
             </div>
             <div class="inputContainer"><label for="frameMovies">Pasta dedicada a filmes</label><input is="emby-input" id="frameMovies"></div>
-            <div class="inputContainer"><label for="frameHosts">Hosts de mídia permitidos (separados por vírgula)</label><input is="emby-input" id="frameHosts"></div>
+            <div class="inputContainer"><label for="frameHosts">Hosts de mídia permitidos (separados por vírgula)</label><input is="emby-input" id="frameHosts">
+                <div class="fieldDescription">Para HTTPS, informe só o domínio. Para autorizar vídeo HTTP, informe a origem completa com a porta, se houver, como http://midia.exemplo:8080.</div>
+            </div>
             <button is="emby-button" type="submit" class="raised button-submit block">Salvar</button>
         </form>
 
