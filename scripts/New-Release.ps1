@@ -32,6 +32,7 @@ $manifest = @(
         description = 'Sincroniza o catálogo Frame em bibliotecas Jellyfin.'
         overview = 'Filmes e séries via STRM e NFO.'
         owner = $Repository.Split('/')[0]
+        imageUrl = "https://raw.githubusercontent.com/$Repository/refs/tags/$tag/src/Jellyfin.Plugin.Frame/Frame-icon.png"
         category = 'General'
         versions = @(
             [ordered]@{
