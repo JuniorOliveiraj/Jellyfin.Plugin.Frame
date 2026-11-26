@@ -78,7 +78,7 @@ public sealed class FrameWebSeriesImports(IApplicationPaths paths, IDataProtecti
 
                 var client = await BrowseAccountSession.CreateClient(origin, paths.PluginConfigurationsPath, protection, stoppingToken);
                 failure = await ImportSeries(client, job.Config, job.Selection, StillConfigured,
-                    IndexSeries, monitor.ReportFileSystemChanged, logger, stoppingToken, progress);
+                    IndexSeries, monitor.ReportFileSystemChanged, logger, stoppingToken, progress, PublishArtwork);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -122,9 +122,22 @@ public sealed class FrameWebSeriesImports(IApplicationPaths paths, IDataProtecti
         }
     }
 
+    private async Task PublishArtwork(string folder, CancellationToken ct)
+    {
+        try
+        {
+            await FrameWebItemIndex.PublishSeriesArtwork(library, folder, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning("O Jellyfin ainda não registrou as imagens da série do Frame ({Type}).", ex.GetType().Name);
+        }
+    }
+
     internal static async Task<string?> ImportSeries(BrowseClient client, FrameConfiguration config,
         FrameImportRequest selection, Func<bool> stillConfigured, Action<FrameItem, string, CancellationToken> index,
-        Action<string> notify, ILogger logger, CancellationToken ct, SeriesImportProgress? progress = null)
+        Action<string> notify, ILogger logger, CancellationToken ct, SeriesImportProgress? progress = null,
+        Func<string, CancellationToken, Task>? publishArtwork = null)
     {
         selection = selection with { IsSeries = true, AllEpisodes = true };
         var item = await client.GetTitleForImport(selection, ct);
@@ -191,6 +204,8 @@ public sealed class FrameWebSeriesImports(IApplicationPaths paths, IDataProtecti
                 {
                     logger.LogWarning("Uma imagem da série do Frame {Id} falhou ({Type}).", item.Id, ex.GetType().Name);
                 }
+                if (publishArtwork is not null)
+                    await publishArtwork(folder, ct);
             }
             finally
             {

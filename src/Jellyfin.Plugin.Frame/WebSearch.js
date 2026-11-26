@@ -521,6 +521,47 @@
         for (const control of state.list.querySelectorAll('button:not(.frame-web-pending)')) control.disabled = opening;
     }
 
+    async function refreshDetailsWhenArtworkArrives(client, item, itemId, detailsHash) {
+        const controller = new AbortController();
+        const { signal } = controller;
+        const timeout = setTimeout(() => controller.abort(), 80000);
+        const onDetails = () => location.hash === detailsHash;
+        window.addEventListener('hashchange', () => {
+            if (!onDetails()) controller.abort();
+        }, { signal });
+        document.addEventListener('click', event => {
+            if (event.target?.closest?.('#itemDetailPage button, .dialogContainer')) controller.abort();
+        }, { capture: true, signal });
+
+        try {
+            let delay = 600;
+            while (!signal.aborted && onDetails()) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+                delay = 1500;
+                if (signal.aborted || !onDetails()) return;
+
+                let status;
+                try {
+                    status = await request(client, item.isSeries ? 'WebSeries' : 'WebMovie',
+                        { externalId: item.externalId }, { signal });
+                } catch {
+                    continue;
+                }
+                if (status?.itemId !== itemId) return;
+                if (status.primaryImageReady === true && !signal.aborted && onDetails()) {
+                    const details = new URLSearchParams(detailsHash.split('?')[1]);
+                    // A new route query asks the native view to read the item again and preserves Back.
+                    details.set('frameArtwork', Date.now().toString(36));
+                    location.replace('#/details?' + details);
+                    return;
+                }
+            }
+        } finally {
+            clearTimeout(timeout);
+            controller.abort();
+        }
+    }
+
     async function openTitle(state, item, page, { open, feedback, status, retry, progress }) {
         if (active !== state || state.opening) return;
 
@@ -560,7 +601,10 @@
             const details = new URLSearchParams({ id: result.itemId });
             const serverId = state.client.api.serverId?.();
             if (serverId) details.set('serverId', serverId);
-            location.hash = '/details?' + details;
+            const detailsHash = '#/details?' + details;
+            location.hash = detailsHash;
+            if (result.primaryImageReady === false)
+                refreshDetailsWhenArtworkArrives(state.client, item, result.itemId, detailsHash);
         } catch (error) {
             if (active === state) {
                 status.textContent = progress?.canRetry() ? '' : error.message;

@@ -162,8 +162,14 @@ internal static class HomeSync
                 poster ? Allowed(source?.LogoBigUrl) : null), includePoster: poster);
     }
 
-    internal static bool HasArtwork(string folder, string name) =>
-        File.Exists(Path.Combine(folder, name + ".jpg")) || File.Exists(Path.Combine(folder, name + ".png"));
+    internal static bool HasArtwork(string folder, string name) => FindArtwork(folder, name) is not null;
+
+    internal static string? FindArtwork(string folder, string name)
+    {
+        var jpeg = Path.Combine(folder, name + ".jpg");
+        var png = Path.Combine(folder, name + ".png");
+        return File.Exists(jpeg) ? jpeg : File.Exists(png) ? png : null;
+    }
 
     internal static bool IsItemFailure(Exception ex, CancellationToken ct) =>
         ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or XmlException or

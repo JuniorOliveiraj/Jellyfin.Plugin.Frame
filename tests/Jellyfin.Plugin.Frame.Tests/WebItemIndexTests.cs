@@ -5,6 +5,7 @@ using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Configuration;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using Xunit;
 
@@ -78,6 +79,8 @@ public sealed class WebItemIndexTests
         try
         {
             await File.WriteAllTextAsync(series ? Path.Combine(folder, "tvshow.nfo") : path, item.VideoUrl);
+            var artworkPath = Path.Combine(folder, "poster.png");
+            await File.WriteAllBytesAsync(artworkPath, [1]);
             Guid? Index()
             {
                 if (!series)
@@ -104,6 +107,7 @@ public sealed class WebItemIndexTests
             Assert.Equal(item.Year, candidate.ProductionYear);
             Assert.Equal(item.Description, candidate.Overview);
             Assert.True(RefreshRequested());
+            Assert.Equal(artworkPath, candidate.GetImageInfo(ImageType.Primary, 0).Path);
 
             Assert.Equal(candidate.Id, Index());
             Assert.Single(saved);
@@ -112,6 +116,29 @@ public sealed class WebItemIndexTests
         finally
         {
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AddsMissingArtworkAndKeepsAnExistingCover()
+    {
+        var directory = Directory.CreateTempSubdirectory("frame-artwork-");
+        try
+        {
+            var item = new Movie();
+            item.AddImage(new ItemImageInfo { Type = ImageType.Primary, Path = "custom-poster.jpg" });
+            await File.WriteAllBytesAsync(Path.Combine(directory.FullName, "poster.png"), [1]);
+            var backdrop = Path.Combine(directory.FullName, "fanart.jpg");
+            await File.WriteAllBytesAsync(backdrop, [2]);
+
+            Assert.True(FrameWebItemIndex.AttachLocalArtwork(item, directory.FullName));
+            Assert.Equal("custom-poster.jpg", item.GetImageInfo(ImageType.Primary, 0).Path);
+            Assert.Equal(backdrop, item.GetImageInfo(ImageType.Backdrop, 0).Path);
+            Assert.False(FrameWebItemIndex.AttachLocalArtwork(item, directory.FullName));
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
         }
     }
 

@@ -10,6 +10,7 @@ using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -244,7 +245,7 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
             var seriesId = FindWebSeries(config!, access.User, selection.ExternalId);
             var progress = seriesImports.Progress(config!, selection.ExternalId);
             if (!selection.RetryPending && seriesId.HasValue && progress is { Status: not "failed" })
-                return Ok(new FrameWebItemResult(seriesId, progress));
+                return Ok(WebResult(seriesId, progress));
 
             switch (seriesImports.Enqueue(config!, selection))
             {
@@ -253,14 +254,14 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 case FrameWebSeriesImports.QueueResult.NoPending:
                     return Conflict(new { message = "A lista de pendências expirou ou já foi resolvida. Faça uma nova busca." });
                 default:
-                    return Accepted(new FrameWebItemResult(seriesId, seriesImports.Progress(config!, selection.ExternalId)));
+                    return Accepted(WebResult(seriesId, seriesImports.Progress(config!, selection.ExternalId)));
             }
         }
 
         if (!access.Movies)
             return NotFound();
         if (FindWebMovie(config!, access.User, selection.ExternalId) is { } itemId)
-            return Ok(new FrameWebItemResult(itemId));
+            return Ok(WebResult(itemId));
 
         return await ImportTitle(selection with { IsSeries = false }, config, ct);
     }
@@ -275,7 +276,7 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
         if (!BrowseClient.IsValidId(externalId))
             return BadRequest();
 
-        return Ok(new FrameWebItemResult(FindWebMovie(config!, access.User, externalId)));
+        return Ok(WebResult(FindWebMovie(config!, access.User, externalId)));
     }
 
     [HttpGet("WebSeries")]
@@ -289,7 +290,14 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
             return BadRequest();
 
         var itemId = FindWebSeries(config!, access.User, externalId);
-        return Ok(new FrameWebItemResult(itemId, seriesImports.Progress(config!, externalId)));
+        return Ok(WebResult(itemId, seriesImports.Progress(config!, externalId)));
+    }
+
+    private FrameWebItemResult WebResult(Guid? itemId, FrameWebSeriesProgress? progress = null)
+    {
+        bool? primaryImageReady = itemId.HasValue &&
+            library.GetItemById(itemId.Value) is { } item ? item.HasImage(ImageType.Primary, 0) : null;
+        return new(itemId, progress, primaryImageReady);
     }
 
     private (User User, bool Movies, bool Series)? GetWebAccess(FrameConfiguration? config)
@@ -477,7 +485,7 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                     try
                     {
                         if (FrameWebItemIndex.Index(library, fileSystem, changedPath, item, webUser, ct) is { } itemId)
-                            return Ok(new FrameWebItemResult(itemId));
+                            return Ok(WebResult(itemId));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -546,7 +554,8 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
 
 internal sealed record FrameWebItemResult(
     [property: JsonPropertyName("itemId")] Guid? ItemId,
-    [property: JsonPropertyName("importProgress"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FrameWebSeriesProgress? ImportProgress = null);
+    [property: JsonPropertyName("importProgress"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FrameWebSeriesProgress? ImportProgress = null,
+    [property: JsonPropertyName("primaryImageReady"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? PrimaryImageReady = null);
 internal sealed record FrameWebPosterResult([property: JsonPropertyName("posterUrl")] string PosterUrl);
 
 public sealed record FrameTokenRequest(string? Token);

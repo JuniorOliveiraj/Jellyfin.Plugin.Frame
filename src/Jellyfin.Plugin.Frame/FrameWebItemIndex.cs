@@ -4,6 +4,7 @@ using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 
 namespace Jellyfin.Plugin.Frame;
@@ -31,6 +32,34 @@ internal static class FrameWebItemIndex
     internal static void IndexSeries(ILibraryManager library, IFileSystem fileSystem, string folder, FrameItem item,
         CancellationToken ct) =>
         IndexItem(library, fileSystem, folder, item, series: true, ct);
+
+    internal static async Task PublishSeriesArtwork(ILibraryManager library, string folder, CancellationToken ct)
+    {
+        if (FindIndexed(library, folder, series: true) is not Series item)
+            return;
+
+        if (AttachLocalArtwork(item, folder))
+            await item.UpdateToRepositoryAsync(ItemUpdateType.ImageUpdate, ct);
+        item.ChangedExternally();
+    }
+
+    internal static bool AttachLocalArtwork(BaseItem item, string folder)
+    {
+        var changed = false;
+        foreach (var (type, name) in new[] { (ImageType.Primary, "poster"), (ImageType.Backdrop, "fanart"), (ImageType.Logo, "logo") })
+        {
+            if (item.HasImage(type, 0) || HomeSync.FindArtwork(folder, name) is not { } path)
+                continue;
+
+            var file = new FileInfo(path);
+            if (!file.Exists || file.LinkTarget is not null || (file.Attributes & FileAttributes.ReparsePoint) != 0)
+                continue;
+
+            item.AddImage(new ItemImageInfo { Type = type, Path = path, DateModified = file.LastWriteTimeUtc });
+            changed = true;
+        }
+        return changed;
+    }
 
     private static BaseItem? IndexItem(ILibraryManager library, IFileSystem fileSystem, string path, FrameItem item,
         bool series, CancellationToken ct)
@@ -67,6 +96,7 @@ internal static class FrameWebItemIndex
         resolved.Name = item.Name!;
         resolved.ProductionYear = item.Year;
         resolved.Overview = item.Description;
+        AttachLocalArtwork(resolved, folder);
         ct.ThrowIfCancellationRequested();
         library.CreateItems([resolved], parent, ct);
         resolved.ChangedExternally();

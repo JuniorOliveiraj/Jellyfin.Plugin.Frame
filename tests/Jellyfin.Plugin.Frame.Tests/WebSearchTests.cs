@@ -62,5 +62,7 @@ public sealed class WebSearchTests
     {
         var id = Guid.NewGuid();
         Assert.Equal($"{{\"itemId\":\"{id}\"}}", JsonSerializer.Serialize(new FrameWebItemResult(id)));
+        using var pending = JsonDocument.Parse(JsonSerializer.Serialize(new FrameWebItemResult(id, PrimaryImageReady: false)));
+        Assert.False(pending.RootElement.GetProperty("primaryImageReady").GetBoolean());
     }
 }
