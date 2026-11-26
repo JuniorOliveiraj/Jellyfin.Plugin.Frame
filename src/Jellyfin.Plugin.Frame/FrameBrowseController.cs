@@ -184,9 +184,11 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
         if (!ValidSearch(term, page))
             return BadRequest(new { message = "Digite de 2 a 120 caracteres para buscar." });
 
-        return await Run(async (client, _) =>
+        return await Run(async (client, current) =>
         {
-            var results = await client.Search(term, page, ct);
+            var artworkHosts = SyncCatalogTask.ReadMediaAllowlist(current.MediaHosts);
+            artworkHosts.Add(BrowseTitleMetadata.ArtworkHost);
+            var results = await client.Search(term, page, ct, artworkHosts);
             return Ok(new FrameSearchPage(results.Items.Where(item => !item.IsSeries).ToArray(), results.CanPageForward));
         }, ct);
     }
@@ -369,7 +371,7 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                     return NotFound();
 
                 await SyncCatalogTask.Materialize(item with { Images = null }, config, hosts, ct,
-                    preserveExistingNfo: fullSeries);
+                    preserveExistingNfo: isSeries);
                 var folder = Path.Combine(Path.GetFullPath(mediaPath), "Frame-" + item.Id);
                 try
                 {

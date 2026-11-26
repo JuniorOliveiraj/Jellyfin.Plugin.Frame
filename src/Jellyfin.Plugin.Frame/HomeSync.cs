@@ -159,7 +159,7 @@ internal static class HomeSync
             new FrameImages(poster ? art?.PosterUrl : null, backdrop ? art?.BackdropUrl : null, null),
             hosts, ct, new FrameImages(poster ? Allowed(source?.PosterUrl) : null,
                 backdrop ? Allowed(source?.BackdropUrl) : null, null,
-                poster ? Allowed(source?.LogoBigUrl) : null));
+                poster ? Allowed(source?.LogoBigUrl) : null), includePoster: poster);
     }
 
     internal static bool HasArtwork(string folder, string name) =>

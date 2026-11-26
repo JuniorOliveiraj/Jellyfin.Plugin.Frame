@@ -5,6 +5,45 @@
     const endpoint = new URL('./', scriptUrl);
     let active;
 
+    const style = document.createElement('style');
+    style.textContent = `
+        #frame-web-results[data-has-movies] ~ .noItemsMessage { display: none; }
+        #frame-web-results .frame-web-status:empty { display: none; }
+        #frame-web-results .frame-web-cards {
+            display: flex;
+            align-items: flex-start;
+            margin: 0 -.6em;
+            padding: 0;
+            overflow-x: auto;
+            scrollbar-width: thin;
+            list-style: none;
+        }
+        #frame-web-results .frame-web-cards > .card { flex: 0 0 auto; min-width: 0; }
+        #frame-web-results .frame-web-open {
+            width: 100%;
+            border: 0;
+            padding: 0;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            text-align: center;
+            cursor: pointer;
+        }
+        #frame-web-results .frame-web-open:focus-visible {
+            outline: 2px solid currentColor;
+            outline-offset: -2px;
+            border-radius: .4em;
+        }
+        #frame-web-results .frame-web-open:disabled { cursor: wait; }
+        #frame-web-results .frame-web-open[aria-busy="true"] .cardScalable { opacity: .6; }
+        #frame-web-results .frame-web-open .cardBox,
+        #frame-web-results .frame-web-open .cardScalable,
+        #frame-web-results .frame-web-open .cardPadder,
+        #frame-web-results .frame-web-open .cardText { display: block; }
+        #frame-web-results .frame-web-poster { display: block; width: 100%; height: 100%; object-fit: cover; }
+    `;
+    document.head.append(style);
+
     function requestClient() {
         const api = window.ApiClient;
         const token = api?.accessToken?.();
@@ -35,6 +74,67 @@
         return element;
     }
 
+    function movieLabel(item) {
+        const suffix = item.name.match(/\s+(?:[-–—]\s*(\d{4})|\((\d{4})\))(\s*\([^()]+\))?\s*$/);
+        const titleYear = suffix ? Number(suffix[1] || suffix[2]) : 0;
+        const year = item.year > 0 ? item.year : titleYear;
+        const title = suffix && year === titleYear
+            ? (item.name.slice(0, suffix.index) + (suffix[3] || '')).trim() : item.name;
+        return { title, year };
+    }
+
+    function movieCard(state, item, page) {
+        const { title, year } = movieLabel(item);
+        const card = document.createElement('li');
+        card.className = 'card overflowPortraitCard';
+        const open = button('', event => openMovie(state, event.currentTarget, item, page));
+        open.className = 'frame-web-open';
+        open.setAttribute('aria-label', 'Abrir ' + title + (year ? ' (' + year + ')' : '') + ' no Jellyfin');
+
+        const box = document.createElement('span');
+        box.className = 'cardBox cardBox-bottompadded';
+        const scalable = document.createElement('span');
+        scalable.className = 'cardScalable';
+        const padder = document.createElement('span');
+        padder.className = 'cardPadder cardPadder-overflowPortrait';
+        const placeholder = document.createElement('span');
+        placeholder.className = 'cardImageIcon material-icons movie';
+        placeholder.setAttribute('aria-hidden', 'true');
+        padder.append(placeholder);
+        scalable.append(padder);
+
+        if (item.posterUrl) {
+            const cover = document.createElement('span');
+            cover.className = 'cardContent cardImageContainer';
+            const poster = document.createElement('img');
+            poster.className = 'frame-web-poster';
+            poster.alt = '';
+            poster.loading = 'lazy';
+            poster.decoding = 'async';
+            poster.referrerPolicy = 'no-referrer';
+            poster.addEventListener('error', () => cover.remove(), { once: true });
+            poster.src = item.posterUrl;
+            cover.append(poster);
+            scalable.append(cover);
+        }
+
+        const name = document.createElement('span');
+        name.className = 'cardText cardText-first';
+        name.textContent = title;
+        name.title = title;
+        box.append(scalable, name);
+        if (year) {
+            const yearText = document.createElement('span');
+            yearText.className = 'cardText cardText-secondary secondaryText';
+            yearText.textContent = String(year);
+            box.append(yearText);
+        }
+
+        open.append(box);
+        card.append(open);
+        return card;
+    }
+
     function createSection(field) {
         const section = document.createElement('section');
         section.id = 'frame-web-results';
@@ -44,10 +144,13 @@
 
         const heading = document.createElement('h2');
         heading.id = 'frame-web-heading';
+        heading.className = 'sectionTitle sectionTitle-cards';
         heading.textContent = 'Resultados do Frame';
         const status = document.createElement('p');
         status.setAttribute('role', 'status');
+        status.className = 'frame-web-status';
         const list = document.createElement('ul');
+        list.className = 'frame-web-cards';
         const navigation = document.createElement('div');
         navigation.className = 'flex align-items-center';
         section.append(heading, status, list, navigation);
@@ -67,6 +170,7 @@
         const controller = new AbortController();
         state.searchRequest?.abort();
         state.searchRequest = controller;
+        delete state.section.dataset.hasMovies;
         state.list.replaceChildren();
         state.navigation.replaceChildren();
         state.status.textContent = 'Buscando no Frame…';
@@ -80,13 +184,8 @@
             }
             state.section.hidden = false;
             state.status.textContent = data.items.length ? '' : 'Nenhum filme nesta página.';
-            for (const item of data.items) {
-                const row = document.createElement('li');
-                const name = document.createElement('span');
-                name.textContent = item.name + (item.year > 0 ? ' (' + item.year + ')' : '');
-                row.append(name, ' ', button('Abrir no Jellyfin', event => openMovie(state, event.currentTarget, item, page)));
-                state.list.append(row);
-            }
+            if (data.items.length) state.section.dataset.hasMovies = '';
+            for (const item of data.items) state.list.append(movieCard(state, item, page));
             if (page > 1) state.navigation.append(button('Página anterior', () => loadPage(state, page - 1)));
             if (page > 1 || data.canPageForward) {
                 const number = document.createElement('span');
@@ -107,8 +206,8 @@
         state.opening = true;
         const controls = [...state.section.querySelectorAll('button')];
         controls.forEach(control => { control.disabled = true; });
-        selectedButton.textContent = 'Abrindo…';
-        state.status.textContent = '';
+        selectedButton.setAttribute('aria-busy', 'true');
+        state.status.textContent = 'Abrindo ' + movieLabel(item).title + '…';
         try {
             let result = await request(state.client, 'WebImport', null, {
                 method: 'POST',
@@ -138,7 +237,7 @@
             if (active === state) state.status.textContent = error.message;
         } finally {
             state.opening = false;
-            selectedButton.textContent = 'Abrir no Jellyfin';
+            selectedButton.removeAttribute('aria-busy');
             controls.forEach(control => { control.disabled = false; });
         }
     }

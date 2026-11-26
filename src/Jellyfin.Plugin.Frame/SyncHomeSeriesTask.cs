@@ -69,7 +69,7 @@ public sealed class SyncHomeSeriesTask(IApplicationPaths paths, IDataProtectionP
                 var needPoster = !HomeSync.HasArtwork(folder, "poster");
                 var needBackdrop = !HomeSync.HasArtwork(folder, "fanart");
                 BrowseTitleMetadata? metadata = null;
-                if (!File.Exists(Path.Combine(folder, "tvshow.nfo")) || needPoster || needBackdrop)
+                if (needPoster || needBackdrop || SyncCatalogTask.NeedsSeriesMetadata(folder, show.Id))
                     metadata = await HomeSync.LoadMetadata(client, card, logger, ct);
                 if (metadata is not null)
                     show = metadata.ApplyTo(show);

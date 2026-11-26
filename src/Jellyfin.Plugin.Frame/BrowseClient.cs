@@ -7,7 +7,7 @@ using System.Text.Json.Serialization;
 
 namespace Jellyfin.Plugin.Frame;
 
-internal sealed record BrowseTitle(string ExternalId, string Name, int Year, bool IsSeries);
+internal sealed record BrowseTitle(string ExternalId, string Name, int Year, bool IsSeries, FrameImages? Images = null);
 internal sealed record BrowsePage(BrowseTitle[] Items);
 internal sealed record BrowseHome(BrowseTitle? Hero, BrowseHomeRow[]? Rows, bool Partial);
 internal sealed record BrowseHomeRow(BrowseHomeItem[]? Items);
@@ -30,7 +30,8 @@ public sealed record FrameSearchResult(
     [property: JsonPropertyName("externalId")] string ExternalId,
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("year")] int Year,
-    [property: JsonPropertyName("isSeries")] bool IsSeries = false);
+    [property: JsonPropertyName("isSeries")] bool IsSeries = false,
+    [property: JsonPropertyName("posterUrl"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PosterUrl = null);
 
 public sealed record FrameSearchPage(
     [property: JsonPropertyName("items")] FrameSearchResult[] Items,
@@ -51,17 +52,28 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
         MaxResponseContentBufferSize = 8 * 1024 * 1024
     };
 
-    internal async Task<FrameSearchPage> Search(string term, int page, CancellationToken ct)
+    internal async Task<FrameSearchPage> Search(string term, int page, CancellationToken ct,
+        HashSet<string>? artworkHosts = null)
     {
         var result = await ReadSearch(term, page, ct);
         var titles = result.Items
             .Where(item => item is not null && IsValidId(item.ExternalId) && !string.IsNullOrWhiteSpace(item.Name))
             .DistinctBy(item => (item.ExternalId, item.IsSeries))
-            .Select(item => new FrameSearchResult(item.ExternalId, item.Name, item.Year, item.IsSeries))
+            .Select(item => new FrameSearchResult(item.ExternalId, item.Name, item.Year, item.IsSeries,
+                SearchPoster(item.Images, artworkHosts)))
             .ToArray();
 
         // The upstream search counts only the current page. An empty raw page ends pagination.
         return new(titles, result.Items.Length > 0 && page < 100);
+    }
+
+    private static string? SearchPoster(FrameImages? images, HashSet<string>? allowed)
+    {
+        if (images is null || allowed is null)
+            return null;
+
+        return new[] { images.PosterUrl, images.LogoBigUrl, images.BackdropUrl, images.LogoUrl }
+            .FirstOrDefault(url => SyncCatalogTask.MediaUrlAllowed(url, allowed));
     }
 
     internal async Task<FrameItem?> GetTitleForImport(FrameImportRequest selection, CancellationToken ct)

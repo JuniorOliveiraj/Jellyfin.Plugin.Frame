@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -225,6 +226,81 @@ public sealed class HomeSyncTests
             Assert.Equal("partial", storedSeries.Status);
             Assert.Equal(1, storedSeries.PendingEpisodes);
             Assert.Equal(series.Issues, storedSeries.Issues);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HomeCompletesAnExistingSeriesWhenMetadataArrivesLater()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var config = new FrameConfiguration { SeriesPath = root, MediaHosts = "media.example.org" };
+        var metadataAvailable = false;
+        var metadataCalls = 0;
+        using var http = new HttpClient(new FakeHomeApi(request =>
+        {
+            switch (request.RequestUri!.AbsolutePath)
+            {
+                case "/home":
+                    return Json("""{"hero":{"externalId":"601","name":"Mil Golpes - 2025","isSeries":true},"rows":[]}""");
+                case "/browse/titles/601":
+                    return Json("""
+                        {"isSeries":true,"series":{"externalId":"601","name":"Mil Golpes - 2025","year":0,
+                         "description":"Sinopse do catálogo","genreNames":["Drama"],
+                         "seasons":[{"number":1,"episodes":[{"number":1,"name":"Piloto",
+                         "videoUrl":"https://media.example.org/video.mp4"}]}]}}
+                        """);
+                case "/browse/titles/601/metadata":
+                    metadataCalls++;
+                    return metadataAvailable ? Json("""
+                        {"id":42,"originalName":"A Thousand Blows","releaseDate":"2025-02-21",
+                         "overview":"Sinopse alternativa","voteAverage":8,"cast":[{"name":"Ator","character":"Personagem"}]}
+                        """) : new(HttpStatusCode.NoContent);
+                default:
+                    throw new InvalidOperationException("Rota inesperada no teste.");
+            }
+        }));
+        var client = new BrowseClient(http, new Uri("https://example.org/"), "test-token");
+        var notified = new List<string>();
+        Task Sync() => SyncHomeSeriesTask.ImportHome(client, config, () => true, notified.Add,
+            NullLogger.Instance, new Progress<double>(), default);
+
+        try
+        {
+            await Sync();
+            var folder = Assert.Single(Directory.GetDirectories(root));
+            var nfo = Path.Combine(folder, "tvshow.nfo");
+            Assert.Null(XElement.Load(nfo).Element("tmdbid"));
+            var stream = Assert.Single(Directory.GetFiles(folder, "*.strm", SearchOption.AllDirectories));
+            var initialStream = await File.ReadAllTextAsync(stream);
+            await File.WriteAllTextAsync(Path.Combine(folder, "poster.jpg"), "Imagem já existente");
+            await File.WriteAllTextAsync(Path.Combine(folder, "fanart.jpg"), "Imagem já existente");
+
+            metadataAvailable = true;
+            notified.Clear();
+            await Sync();
+
+            var enriched = XElement.Load(nfo);
+            Assert.Equal(42, (int?)enriched.Element("tmdbid"));
+            Assert.Equal(2025, (int?)enriched.Element("year"));
+            Assert.Equal("2025-02-21", (string?)enriched.Element("premiered"));
+            Assert.Equal("A Thousand Blows", (string?)enriched.Element("originaltitle"));
+            Assert.Equal("Ator", (string?)enriched.Element("actor")?.Element("name"));
+            Assert.Equal("Sinopse do catálogo", (string?)enriched.Element("plot"));
+            Assert.Equal("Drama", (string?)enriched.Element("genre"));
+            Assert.Equal(folder, Assert.Single(notified));
+            Assert.Equal(folder, Assert.Single(Directory.GetDirectories(root)));
+            Assert.Equal(stream, Assert.Single(Directory.GetFiles(folder, "*.strm", SearchOption.AllDirectories)));
+            Assert.Equal(initialStream, await File.ReadAllTextAsync(stream));
+
+            notified.Clear();
+            await Sync();
+            Assert.Empty(notified);
+            Assert.Equal(2, metadataCalls);
         }
         finally
         {

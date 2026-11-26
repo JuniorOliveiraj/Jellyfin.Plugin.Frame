@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Xml;
 using System.Xml.Linq;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
@@ -168,7 +169,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             }
         }
         var series = OpenFolder(config.SeriesPath, "Frame-" + item.Id);
-        var changed = await WriteNfo(series, "tvshow.nfo", show, preserveExistingNfo, cancellationToken);
+        var changed = await WriteNfo(series, "tvshow.nfo", show, preserveExistingNfo, cancellationToken, item.Id);
         foreach (var episode in episodes)
         {
             var folder = OpenFolder(series, SeasonFolderName(episode.Season));
@@ -224,7 +225,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
     internal static string SeasonFolderName(int season) => FormattableString.Invariant($"Season {season:D2}");
 
     internal static async Task<bool> ImportArtwork(string folder, FrameImages? images, HashSet<string> hosts,
-        CancellationToken cancellationToken, FrameImages? fallback = null, HttpClient? imageClient = null)
+        CancellationToken cancellationToken, FrameImages? fallback = null, HttpClient? imageClient = null, bool includePoster = true)
     {
         if (images is null && fallback is null)
             return false;
@@ -239,6 +240,9 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             ("logo", new[] { images?.LogoUrl, fallback?.LogoUrl })
         })
         {
+            if (name == "poster" && !includePoster)
+                continue;
+
             Exception? failure = null;
             foreach (var value in variants.Where(url => !string.IsNullOrWhiteSpace(url)).Distinct(StringComparer.Ordinal))
             {
@@ -358,10 +362,15 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
     private static string OpenFolder(string root, string name)
     {
         var path = Path.GetFullPath(Path.Combine(root, name));
-        for (var current = new DirectoryInfo(path); current is not null; current = current.Parent)
-            RejectLink(current);
+        RejectFolderLinks(path);
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static void RejectFolderLinks(string path)
+    {
+        for (var current = new DirectoryInfo(path); current is not null; current = current.Parent)
+            RejectLink(current);
     }
 
     private static void RejectLink(FileSystemInfo entry)
@@ -370,14 +379,89 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             throw new IOException("Links não são permitidos na biblioteca gerenciada.");
     }
 
+    internal static bool NeedsSeriesMetadata(string folder, Guid seriesId)
+    {
+        try
+        {
+            RejectFolderLinks(folder);
+            var target = new FileInfo(Path.Combine(folder, "tvshow.nfo"));
+            if (!target.Exists)
+                return true;
+
+            return ReadManagedSeriesNfo(target, seriesId) is { } existing &&
+                (!TmdbIds(existing).Any() || !HasValue(existing, "premiered") ||
+                 !HasValue(existing, "originaltitle") || !HasValue(existing, "actor"));
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static XElement? ReadManagedSeriesNfo(FileInfo file, Guid seriesId)
+    {
+        RejectLink(file);
+        try
+        {
+            using var input = file.OpenRead();
+            using var reader = XmlReader.Create(input, new XmlReaderSettings { MaxCharactersInDocument = 1024 * 1024 });
+            var nfo = XElement.Load(reader);
+            return nfo.Name == "tvshow" &&
+                nfo.Elements("uniqueid").Any(id => (string?)id.Attribute("type") == "frame" &&
+                    Guid.TryParse(id.Value, out var parsed) && parsed == seriesId) &&
+                !string.Equals(nfo.Element("lockdata")?.Value.Trim(), "true", StringComparison.OrdinalIgnoreCase) &&
+                !HasValue(nfo, "lockedfields") ? nfo : null;
+        }
+        catch (XmlException)
+        {
+            return null;
+        }
+    }
+
+    private static IEnumerable<string> TmdbIds(XElement nfo) =>
+        nfo.Elements("tmdbid").Concat(nfo.Elements("uniqueid")
+            .Where(id => string.Equals((string?)id.Attribute("type"), "tmdb", StringComparison.OrdinalIgnoreCase)))
+            .Select(element => element.Value.Trim()).Where(value => value.Length != 0);
+
+    private static bool HasValue(XElement nfo, XName name) =>
+        nfo.Elements(name).Any(element => !string.IsNullOrWhiteSpace(element.Value));
+
+    private static Task<bool> FillSeriesNfo(string folder, FileInfo target, XElement content, Guid seriesId,
+        CancellationToken ct)
+    {
+        var tmdbId = content.Element("tmdbid")?.Value;
+        if (tmdbId is null || ReadManagedSeriesNfo(target, seriesId) is not { } existing ||
+            TmdbIds(existing).Any(id => id != tmdbId))
+            return Task.FromResult(false);
+
+        var changed = false;
+        foreach (var field in content.Elements().Where(element => element.Name != "title" &&
+            element.Name != "uniqueid" && !string.IsNullOrWhiteSpace(element.Value)).GroupBy(element => element.Name))
+        {
+            if (field.Key == "tmdbid" ? TmdbIds(existing).Any() : HasValue(existing, field.Key))
+                continue;
+
+            existing.Elements(field.Key).Remove();
+            existing.Add(field.Select(element => new XElement(element)));
+            changed = true;
+        }
+
+        return changed ? Write(folder, target.Name, existing.ToString(), ct) : Task.FromResult(false);
+    }
+
     private static Task<bool> WriteNfo(string folder, string name, XElement content, bool preserve,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, Guid? seriesId = null)
     {
         var target = new FileInfo(Path.Combine(folder, name));
         RejectLink(target);
-        return preserve && target.Exists
-            ? Task.FromResult(false)
-            : Write(folder, name, content.ToString(), cancellationToken);
+        if (!preserve || !target.Exists)
+            return Write(folder, name, content.ToString(), cancellationToken);
+
+        return seriesId is Guid id ? FillSeriesNfo(folder, target, content, id, cancellationToken) : Task.FromResult(false);
     }
 
     private static Task<bool> Write(string folder, string name, string content, CancellationToken cancellationToken) =>

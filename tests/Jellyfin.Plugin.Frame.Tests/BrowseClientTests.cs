@@ -50,6 +50,38 @@ public sealed class BrowseClientTests
     }
 
     [Fact]
+    public async Task WebResultsUseTheSearchPosterWithoutRequestingTheMovieDetails()
+    {
+        using var handler = new FakeApi((request, _) =>
+        {
+            Assert.Equal("/browse/search/Chefinho?page=1", request.RequestUri!.PathAndQuery);
+            return Json("""
+                {"items":[
+                  {"externalId":"123","name":"O Poderoso Chefinho","year":2017,
+                   "images":{"logoBigUrl":"https://image.tmdb.org/t/p/w500/poster.jpg",
+                             "backdropUrl":"https://image.tmdb.org/t/p/w1280/backdrop.jpg"}},
+                  {"externalId":"456","name":"Outro filme","images":{"logoBigUrl":"http://image.tmdb.org/poster.jpg",
+                   "backdropUrl":"https://images.example.org/backdrop.jpg"}},
+                  {"externalId":"789","name":"Sem capa autorizada","images":{"posterUrl":"https://unlisted.example.org/other.jpg"}}
+                ]}
+                """);
+        });
+        using var http = new HttpClient(handler);
+        var client = new BrowseClient(http, new Uri("https://example.org/"), "test-token");
+        var hosts = SyncCatalogTask.ReadMediaAllowlist("image.tmdb.org, images.example.org");
+
+        var page = await client.Search("Chefinho", 1, default, hosts);
+
+        Assert.Collection(page.Items,
+            film => Assert.Equal("https://image.tmdb.org/t/p/w500/poster.jpg", film.PosterUrl),
+            film => Assert.Equal("https://images.example.org/backdrop.jpg", film.PosterUrl),
+            film => Assert.Null(film.PosterUrl));
+        Assert.Equal(1, handler.Calls);
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(page));
+        Assert.Equal(page.Items[0].PosterUrl, json.RootElement.GetProperty("items")[0].GetProperty("posterUrl").GetString());
+    }
+
+    [Fact]
     public async Task RepeatsSearchOnceAfterCacheMissAndUsesStableId()
     {
         using var handler = new FakeApi((request, call) =>

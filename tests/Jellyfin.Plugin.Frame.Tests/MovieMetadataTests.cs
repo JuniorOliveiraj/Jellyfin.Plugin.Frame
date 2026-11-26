@@ -161,6 +161,67 @@ public sealed class MovieMetadataTests
             .GetTitleMetadata("123", default));
     }
 
+    [Fact]
+    public async Task FetchingAMissingBackdropKeepsAnExistingPoster()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        const string backdrop = "https://media.example.org/backdrop.png";
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nX0AAAAASUVORK5CYII=");
+        using var images = new HttpClient(new FakeHttp(request =>
+        {
+            Assert.Equal(backdrop, request.RequestUri!.AbsoluteUri);
+            var content = new ByteArrayContent(png);
+            content.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+            return new(HttpStatusCode.OK) { Content = content };
+        }));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var poster = Path.Combine(root, "poster.png");
+            await File.WriteAllTextAsync(poster, "Capa existente");
+            var hosts = SyncCatalogTask.ReadMediaAllowlist("media.example.org");
+
+            await SyncCatalogTask.ImportArtwork(root, null, hosts, default,
+                new(null, backdrop, null), images, includePoster: false);
+
+            Assert.Equal("Capa existente", await File.ReadAllTextAsync(poster));
+            Assert.Equal(png, await File.ReadAllBytesAsync(Path.Combine(root, "fanart.png")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("<lockdata>true</lockdata>")]
+    [InlineData("<uniqueid type=\"tmdb\">99</uniqueid>")]
+    public async Task ReimportPreservesLockedMetadataOrAManualTmdbChoice(string manualMetadata)
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var show = new FrameItem(Guid.NewGuid(), "Série", "series", null, null, null, null, null, null,
+            null, [new(1, [new(Guid.NewGuid(), 1, "Piloto", null, null, "https://media.example.org/video.mp4")])]);
+        var config = new FrameConfiguration { SeriesPath = root };
+        var hosts = SyncCatalogTask.ReadMediaAllowlist("media.example.org");
+        try
+        {
+            await SyncCatalogTask.Materialize(show, config, hosts, default);
+            var folder = Assert.Single(Directory.GetDirectories(root));
+            var nfo = Path.Combine(folder, "tvshow.nfo");
+            var manual = $"<tvshow><title>Série</title><uniqueid type=\"frame\">{show.Id}</uniqueid>{manualMetadata}</tvshow>";
+            await File.WriteAllTextAsync(nfo, manual);
+            var updated = show with { TitleMetadata = new(42, "Nome original", new DateOnly(2025, 2, 21), null, null) };
+
+            Assert.False(await SyncCatalogTask.Materialize(updated, config, hosts, default, preserveExistingNfo: true));
+            Assert.Equal(manual, await File.ReadAllTextAsync(nfo));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class FakeHttp(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
