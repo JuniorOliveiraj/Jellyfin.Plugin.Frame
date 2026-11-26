@@ -7,18 +7,41 @@
 
     const style = document.createElement('style');
     style.textContent = `
-        #frame-web-results[data-has-movies] ~ .noItemsMessage { display: none; }
+        #searchPage[data-frame-has-movies] .noItemsMessage { display: none; }
         #frame-web-results .frame-web-status:empty { display: none; }
-        #frame-web-results .frame-web-cards {
-            display: flex;
-            align-items: flex-start;
-            margin: 0 -.6em;
-            padding: 0;
-            overflow-x: auto;
-            scrollbar-width: thin;
-            list-style: none;
+        #frame-web-results .frame-web-cards,
+        #searchPage[data-frame-vertical] [data-frame-library-movies] .itemsContainer {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(min(100%, clamp(8rem, 14vw, 12rem)), 1fr));
+            align-items: start;
         }
-        #frame-web-results .frame-web-cards > .card { flex: 0 0 auto; min-width: 0; }
+        #frame-web-results .frame-web-cards { margin: 0 -.6em; padding: 0; list-style: none; }
+        #frame-web-results .frame-web-cards > .card,
+        #searchPage[data-frame-vertical] [data-frame-library-movies] .itemsContainer > .card {
+            width: 100%;
+            min-width: 0;
+        }
+        #searchPage[data-frame-vertical] .searchResults { padding-bottom: 0 !important; }
+        #searchPage[data-frame-vertical] [data-frame-library-movies] > .emby-scrollbuttons { display: none; }
+        #searchPage[data-frame-vertical] [data-frame-library-movies] > [is="emby-scroller"] {
+            overflow: visible !important;
+            touch-action: auto !important;
+        }
+        #searchPage[data-frame-vertical] [data-frame-library-movies] .itemsContainer {
+            width: auto !important;
+            white-space: normal !important;
+            transform: none !important;
+        }
+        #frame-web-results .frame-web-sentinel { height: 1px; }
+        #frame-web-results .frame-web-feedback {
+            margin: -.7em .6em 1em;
+            font-size: .88em;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+        #frame-web-results .frame-web-feedback[hidden],
+        #frame-web-results .frame-web-retry[hidden] { display: none; }
+        #frame-web-results .frame-web-feedback .frame-web-status { margin: 0 0 .35em; }
         #frame-web-results .frame-web-open {
             width: 100%;
             border: 0;
@@ -59,9 +82,10 @@
         const headers = { 'X-Emby-Token': token };
         if (options.body) headers['Content-Type'] = 'application/json';
         const response = await fetch(url, { cache: 'no-store', redirect: 'error', ...options, headers });
-        if (response.status === 401 || response.status === 403 || response.status === 404) return null;
         const data = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(data?.message || data?.Message || 'O Frame não respondeu. Tente novamente.');
+        const message = data?.message || data?.Message;
+        if (!message && [401, 403, 404].includes(response.status)) return null;
+        if (!response.ok) throw new Error(message || 'O Frame não respondeu. Tente novamente.');
         return data;
     }
 
@@ -74,22 +98,98 @@
         return element;
     }
 
+    const languageMarker = 'LEG(?:ENDAD[OA])?|DUB(?:LAD[OA])?|DUAL(?:[ -]+[AÁ]UDIO)?';
+    const trailingLanguage = new RegExp(
+        '\\s*(?:\\((' + languageMarker + ')\\)|\\[(' + languageMarker + ')\\]|[-–—]\\s*(' + languageMarker + '))\\s*$', 'i');
+
+    function titleLanguage(title) {
+        const match = title.match(trailingLanguage);
+        if (!match || match.index === 0) return { title, language: '' };
+
+        const marker = (match[1] || match[2] || match[3]).toUpperCase();
+        const language = marker.startsWith('LEG') ? 'Legendado' : marker.startsWith('DUB') ? 'Dublado' : 'Dual áudio';
+        return { title: title.slice(0, match.index).trimEnd(), language };
+    }
+
     function movieLabel(item) {
-        const suffix = item.name.match(/\s+(?:[-–—]\s*(\d{4})|\((\d{4})\))(\s*\([^()]+\))?\s*$/);
+        let label = titleLanguage(item.name.trim());
+        const suffix = label.title.match(/\s+(?:[-–—]\s*(\d{4})|\((\d{4})\))(\s*\([^()]+\))?\s*$/);
         const titleYear = suffix ? Number(suffix[1] || suffix[2]) : 0;
         const year = item.year > 0 ? item.year : titleYear;
-        const title = suffix && year === titleYear
-            ? (item.name.slice(0, suffix.index) + (suffix[3] || '')).trim() : item.name;
-        return { title, year };
+        if (suffix && year === titleYear) {
+            const clean = titleLanguage((label.title.slice(0, suffix.index) + (suffix[3] || '')).trim());
+            label = { title: clean.title, language: label.language || clean.language };
+        }
+        return { ...label, year };
+    }
+
+    function addPoster(container, url, onError) {
+        const cover = document.createElement('span');
+        cover.className = 'cardContent cardImageContainer';
+        const poster = document.createElement('img');
+        poster.className = 'frame-web-poster';
+        poster.alt = '';
+        poster.loading = 'lazy';
+        poster.decoding = 'async';
+        poster.referrerPolicy = 'no-referrer';
+        poster.addEventListener('error', () => {
+            cover.remove();
+            onError?.();
+        }, { once: true });
+        poster.src = url;
+        cover.append(poster);
+        container.append(cover);
+    }
+
+    function observePoster(state, card, container, item) {
+        if (active !== state || !window.IntersectionObserver) return;
+        state.posterObserver ??= new IntersectionObserver(entries => {
+            for (const { target, isIntersecting } of entries) {
+                if (!isIntersecting || active !== state) continue;
+                const load = state.pendingPosters.get(target);
+                state.pendingPosters.delete(target);
+                state.posterObserver.unobserve(target);
+                load?.();
+            }
+        });
+
+        state.pendingPosters.set(card, async () => {
+            try {
+                const data = await request(state.client, 'WebPoster', { externalId: item.externalId },
+                    { signal: state.posterAbort.signal });
+                if (active === state && card.isConnected && data?.posterUrl && data.posterUrl !== item.posterUrl) {
+                    addPoster(container, data.posterUrl);
+                }
+            } catch {
+                // Keep the placeholder when the cached poster is unavailable.
+            }
+        });
+        state.posterObserver.observe(card);
     }
 
     function movieCard(state, item, page) {
-        const { title, year } = movieLabel(item);
+        const { title, year, language } = movieLabel(item);
+        const metadata = [year, language].filter(Boolean).join(' · ');
         const card = document.createElement('li');
         card.className = 'card overflowPortraitCard';
-        const open = button('', event => openMovie(state, event.currentTarget, item, page));
+
+        const start = () => openMovie(state, item, page, { open, feedback, status, retry });
+        const open = button('', start);
         open.className = 'frame-web-open';
-        open.setAttribute('aria-label', 'Abrir ' + title + (year ? ' (' + year + ')' : '') + ' no Jellyfin');
+        open.disabled = !!state.opening;
+        open.setAttribute('aria-label', 'Abrir ' + title + (metadata ? ' (' + metadata + ')' : '') + ' no Jellyfin');
+
+        const feedback = document.createElement('div');
+        feedback.className = 'frame-web-feedback';
+        feedback.hidden = true;
+        const status = document.createElement('p');
+        status.className = 'frame-web-status';
+        status.setAttribute('role', 'status');
+        const retry = button('Tentar novamente', start);
+        retry.classList.add('frame-web-retry');
+        retry.setAttribute('aria-label', 'Tentar novamente: ' + title + (metadata ? ' (' + metadata + ')' : ''));
+        retry.hidden = true;
+        feedback.append(status, retry);
 
         const box = document.createElement('span');
         box.className = 'cardBox cardBox-bottompadded';
@@ -103,19 +203,11 @@
         padder.append(placeholder);
         scalable.append(padder);
 
+        const findPoster = () => observePoster(state, card, scalable, item);
         if (item.posterUrl) {
-            const cover = document.createElement('span');
-            cover.className = 'cardContent cardImageContainer';
-            const poster = document.createElement('img');
-            poster.className = 'frame-web-poster';
-            poster.alt = '';
-            poster.loading = 'lazy';
-            poster.decoding = 'async';
-            poster.referrerPolicy = 'no-referrer';
-            poster.addEventListener('error', () => cover.remove(), { once: true });
-            poster.src = item.posterUrl;
-            cover.append(poster);
-            scalable.append(cover);
+            addPoster(scalable, item.posterUrl, findPoster);
+        } else {
+            findPoster();
         }
 
         const name = document.createElement('span');
@@ -123,22 +215,22 @@
         name.textContent = title;
         name.title = title;
         box.append(scalable, name);
-        if (year) {
-            const yearText = document.createElement('span');
-            yearText.className = 'cardText cardText-secondary secondaryText';
-            yearText.textContent = String(year);
-            box.append(yearText);
+        if (metadata) {
+            const details = document.createElement('span');
+            details.className = 'cardText cardText-secondary secondaryText';
+            details.textContent = metadata;
+            box.append(details);
         }
 
         open.append(box);
-        card.append(open);
+        card.append(open, feedback);
         return card;
     }
 
-    function createSection(field) {
+    function createSection() {
         const section = document.createElement('section');
         section.id = 'frame-web-results';
-        section.className = 'padded-left padded-right';
+        section.className = 'padded-left padded-right padded-bottom-page';
         section.setAttribute('aria-labelledby', 'frame-web-heading');
         section.hidden = true;
 
@@ -151,63 +243,116 @@
         status.className = 'frame-web-status';
         const list = document.createElement('ul');
         list.className = 'frame-web-cards';
-        const navigation = document.createElement('div');
-        navigation.className = 'flex align-items-center';
-        section.append(heading, status, list, navigation);
-        field.closest('.searchFields').after(section);
-        return { section, status, list, navigation };
+        const footer = document.createElement('div');
+        footer.setAttribute('aria-live', 'polite');
+        const sentinel = document.createElement('div');
+        sentinel.className = 'frame-web-sentinel';
+        sentinel.setAttribute('aria-hidden', 'true');
+        section.append(heading, status, list, footer, sentinel);
+        return { section, status, list, footer, sentinel };
+    }
+
+    function placeAfterLibrary(state) {
+        const parent = state.field.closest('.searchFields').parentElement;
+        if (parent.lastElementChild !== state.section) parent.append(state.section);
+
+        if (!state.page.hasAttribute('data-frame-vertical')) return;
+        for (const row of state.page.querySelectorAll('.searchResults .verticalSection')) {
+            row.toggleAttribute('data-frame-library-movies', !!row.querySelector('.card[data-type="Movie"]'));
+        }
     }
 
     function reset() {
         if (!active) return;
         clearTimeout(active.queryTimer);
         active.searchRequest?.abort();
+        active.observer?.disconnect();
+        active.posterObserver?.disconnect();
+        active.posterAbort.abort();
+        active.page.removeAttribute('data-frame-vertical');
+        active.page.removeAttribute('data-frame-has-movies');
         active.section.remove();
         active = undefined;
     }
 
-    async function loadPage(state, page) {
+    function observeNextPage(state) {
+        if (!state.hasNext) return;
+        if (!window.IntersectionObserver) {
+            state.footer.append(button('Carregar mais filmes', () => loadNextPage(state)));
+            return;
+        }
+
+        state.observer ??= new IntersectionObserver(entries => {
+            if (entries.some(entry => entry.isIntersecting)) loadNextPage(state);
+        }, { rootMargin: '0px 0px 240px' });
+        state.observer.observe(state.sentinel);
+    }
+
+    async function loadNextPage(state) {
+        if (active !== state || state.searchRequest || !state.hasNext) return;
+
+        state.observer?.unobserve(state.sentinel);
         const controller = new AbortController();
-        state.searchRequest?.abort();
         state.searchRequest = controller;
-        delete state.section.dataset.hasMovies;
-        state.list.replaceChildren();
-        state.navigation.replaceChildren();
-        state.status.textContent = 'Buscando no Frame…';
+        const page = state.nextPage;
+        state.footer.textContent = page === 1 ? 'Buscando no Frame…' : 'Carregando mais filmes…';
 
         try {
             const data = await request(state.client, 'WebSearch', { term: state.term, page }, { signal: controller.signal });
             if (active !== state || controller.signal.aborted) return;
             if (!data) {
+                state.hasNext = false;
                 state.section.hidden = true;
+                state.page.removeAttribute('data-frame-vertical');
+                state.page.removeAttribute('data-frame-has-movies');
                 return;
             }
-            state.section.hidden = false;
-            state.status.textContent = data.items.length ? '' : 'Nenhum filme nesta página.';
-            if (data.items.length) state.section.dataset.hasMovies = '';
-            for (const item of data.items) state.list.append(movieCard(state, item, page));
-            if (page > 1) state.navigation.append(button('Página anterior', () => loadPage(state, page - 1)));
-            if (page > 1 || data.canPageForward) {
-                const number = document.createElement('span');
-                number.textContent = 'Página ' + page;
-                state.navigation.append(number);
+            if (!Array.isArray(data.items)) throw new Error('O Frame devolveu uma resposta de busca inválida.');
+
+            const repeated = data.pageKey && state.seenPages.has(data.pageKey);
+            if (data.pageKey) state.seenPages.add(data.pageKey);
+            if (!repeated) {
+                for (const item of data.items) {
+                    if (state.seenMovies.has(item.externalId)) continue;
+                    state.seenMovies.add(item.externalId);
+                    state.list.append(movieCard(state, item, page));
+                }
             }
-            if (data.canPageForward) state.navigation.append(button('Próxima página', () => loadPage(state, page + 1)));
+
+            state.hasNext = data.canPageForward === true && !repeated;
+            state.nextPage = page + 1;
+            state.section.hidden = false;
+            state.page.setAttribute('data-frame-vertical', '');
+            state.page.toggleAttribute('data-frame-has-movies', state.seenMovies.size > 0);
+            placeAfterLibrary(state);
+            state.footer.textContent = '';
+            if (!state.hasNext && state.seenMovies.size === 0) {
+                state.status.textContent = 'Nenhum filme adicional no Frame.';
+            }
+            observeNextPage(state);
         } catch (error) {
             if (active !== state || controller.signal.aborted) return;
             state.section.hidden = false;
-            state.status.textContent = error.message;
-            state.navigation.replaceChildren(button('Tentar novamente', () => loadPage(state, page)));
+            state.footer.replaceChildren(document.createTextNode(error.message + ' '),
+                button('Tentar novamente', () => loadNextPage(state)));
+        } finally {
+            state.searchRequest = null;
         }
     }
 
-    async function openMovie(state, selectedButton, item, page) {
-        if (state.opening) return;
-        state.opening = true;
-        const controls = [...state.section.querySelectorAll('button')];
-        controls.forEach(control => { control.disabled = true; });
-        selectedButton.setAttribute('aria-busy', 'true');
-        state.status.textContent = 'Abrindo ' + movieLabel(item).title + '…';
+    function setOpening(state, opening) {
+        state.opening = opening;
+        for (const control of state.list.querySelectorAll('button')) control.disabled = opening;
+    }
+
+    async function openMovie(state, item, page, { open, feedback, status, retry }) {
+        if (active !== state || state.opening) return;
+
+        feedback.hidden = false;
+        retry.hidden = true;
+        status.textContent = 'Importando…';
+        setOpening(state, true);
+        open.setAttribute('aria-busy', 'true');
         try {
             let result = await request(state.client, 'WebImport', null, {
                 method: 'POST',
@@ -215,7 +360,7 @@
             });
             if (active !== state) return;
             if (!result) throw new Error('O filme está indisponível. Faça uma nova busca.');
-            if (!result.itemId) state.status.textContent = 'Filme importado. Aguardando o Jellyfin atualizar a biblioteca…';
+            if (!result.itemId) status.textContent = 'Filme importado. Aguardando a biblioteca do Jellyfin…';
 
             for (let attempt = 0; active === state && !result.itemId && attempt < 40; attempt++) {
                 await new Promise(resolve => setTimeout(resolve, 2000));
@@ -224,21 +369,21 @@
                 if (!result) throw new Error('A biblioteca Frame ficou indisponível.');
             }
             if (active !== state) return;
-            if (!result.itemId) {
-                state.status.textContent = 'O Jellyfin ainda está atualizando a biblioteca. Tente abrir novamente em instantes.';
-                return;
-            }
+            if (!result.itemId) throw new Error('Filme salvo. O Jellyfin ainda está atualizando a biblioteca.');
 
+            status.textContent = 'Abrindo no Jellyfin…';
             const details = new URLSearchParams({ id: result.itemId });
             const serverId = state.client.api.serverId?.();
             if (serverId) details.set('serverId', serverId);
             location.hash = '/details?' + details;
         } catch (error) {
-            if (active === state) state.status.textContent = error.message;
+            if (active === state) {
+                status.textContent = error.message;
+                retry.hidden = false;
+            }
         } finally {
-            state.opening = false;
-            selectedButton.removeAttribute('aria-busy');
-            controls.forEach(control => { control.disabled = false; });
+            setOpening(state, false);
+            open.removeAttribute('aria-busy');
         }
     }
 
@@ -255,13 +400,26 @@
             reset();
             return;
         }
-        if (active?.field === field && active.term === term && active.client.token === client.token &&
-            active.section.isConnected) return;
+        if (active?.field === field && active.term === term && active.client.token === client.token) {
+            placeAfterLibrary(active);
+            return;
+        }
 
         reset();
-        const state = { field, term, client, ...createSection(field) };
+        const state = {
+            field, term, client,
+            page: field.closest('#searchPage'),
+            nextPage: 1,
+            hasNext: true,
+            seenMovies: new Set(),
+            seenPages: new Set(),
+            pendingPosters: new Map(),
+            posterAbort: new AbortController(),
+            ...createSection()
+        };
         active = state;
-        state.queryTimer = setTimeout(() => loadPage(state, 1), 500);
+        placeAfterLibrary(state);
+        state.queryTimer = setTimeout(() => loadNextPage(state), 500);
     }
 
     document.addEventListener('input', event => {

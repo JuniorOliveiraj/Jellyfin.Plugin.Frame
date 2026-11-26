@@ -35,7 +35,20 @@ public sealed record FrameSearchResult(
 
 public sealed record FrameSearchPage(
     [property: JsonPropertyName("items")] FrameSearchResult[] Items,
-    [property: JsonPropertyName("canPageForward")] bool CanPageForward);
+    [property: JsonPropertyName("canPageForward")] bool CanPageForward,
+    [property: JsonPropertyName("pageKey"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PageKey = null)
+{
+    internal FrameSearchPage ForWeb(Func<string, bool> isIndexed)
+    {
+        // Keep the identity of the upstream page even if all its results are hidden below.
+        var ids = string.Join("\n", Items.Select(item => $"{item.IsSeries}:{item.ExternalId}").Order(StringComparer.Ordinal));
+        return this with
+        {
+            Items = Items.Where(item => !item.IsSeries && !isIndexed(item.ExternalId)).ToArray(),
+            PageKey = ids.Length == 0 ? null : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(ids)))
+        };
+    }
+}
 
 public sealed record FrameImportRequest(
     [property: JsonPropertyName("term")] string Term,
@@ -64,7 +77,7 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
             .ToArray();
 
         // The upstream search counts only the current page. An empty raw page ends pagination.
-        return new(titles, result.Items.Length > 0 && page < 100);
+        return new(titles, result.Items.Length > 0 && page < int.MaxValue);
     }
 
     private static string? SearchPoster(FrameImages? images, HashSet<string>? allowed)
@@ -213,6 +226,15 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
     internal Task<BrowseTitleMetadata?> GetTitleMetadata(string externalId, CancellationToken ct) =>
         Read<BrowseTitleMetadata>("browse/titles/" + Uri.EscapeDataString(externalId) + "/metadata", ct,
             allowMissing: true);
+
+    internal async Task<string?> GetCachedPoster(string externalId, CancellationToken ct)
+    {
+        var path = "browse/titles/" + Uri.EscapeDataString(externalId) + "/metadata/cached";
+        var poster = await Read<CachedPoster>(path, ct, allowMissing: true);
+        return BrowseTitleMetadata.PosterUrl(poster?.PosterPath);
+    }
+
+    private sealed record CachedPoster(string? PosterPath);
 
     internal Task<BrowseTitleMetadata?> GetPersistedTitleMetadata(Guid id, CancellationToken ct) =>
         Read<BrowseTitleMetadata>($"catalog/titles/{id:D}/metadata", ct, allowMissing: true);

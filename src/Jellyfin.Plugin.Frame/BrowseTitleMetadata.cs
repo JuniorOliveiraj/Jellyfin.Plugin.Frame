@@ -24,7 +24,9 @@ internal sealed record BrowseTitleMetadata(int Id, string? OriginalName, string?
         };
     }
 
-    internal FrameImages Artwork() => new(TmdbImage(PosterPath, "w500"), TmdbImage(BackdropPath, "w1280"), null);
+    internal FrameImages Artwork() => new(PosterUrl(PosterPath), TmdbImage(BackdropPath, "w1280"), null);
+
+    internal static string? PosterUrl(string? path) => TmdbImage(path, "w500");
 
     private static string? TmdbImage(string? path, string size)
     {

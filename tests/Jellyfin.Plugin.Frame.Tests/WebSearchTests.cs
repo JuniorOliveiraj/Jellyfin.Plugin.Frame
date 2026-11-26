@@ -43,6 +43,7 @@ public sealed class WebSearchTests
                     break;
                 case "WebSearch":
                 case "WebMovie":
+                case "WebPoster":
                 case "WebImport":
                     Assert.Null(anonymous);
                     Assert.Null(authorize);

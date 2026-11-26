@@ -9,8 +9,8 @@ using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Entities;
-using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.IO;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -21,7 +21,7 @@ namespace Jellyfin.Plugin.Frame;
 [Route("Frame/Browse")]
 [Authorize]
 public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<FrameBrowseController> logger,
-    IApplicationPaths paths, IDataProtectionProvider protection, IUserManager users, ILibraryManager library)
+    IApplicationPaths paths, IDataProtectionProvider protection, IUserManager users, ILibraryManager library, IFileSystem fileSystem)
     : ControllerBase
 {
     [Authorize(Policy = "RequiresElevation")]
@@ -179,17 +179,40 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
         CancellationToken ct = default)
     {
         var config = Plugin.Instance?.Configuration;
-        if (GetWebUser(config) is null)
+        if (GetWebUser(config) is not { } user)
             return NotFound();
         if (!ValidSearch(term, page))
             return BadRequest(new { message = "Digite de 2 a 120 caracteres para buscar." });
 
         return await Run(async (client, current) =>
         {
+            if (!ReferenceEquals(config, current))
+                return Conflict(new { message = "A configuração mudou. Faça uma nova busca." });
+
             var artworkHosts = SyncCatalogTask.ReadMediaAllowlist(current.MediaHosts);
             artworkHosts.Add(BrowseTitleMetadata.ArtworkHost);
             var results = await client.Search(term, page, ct, artworkHosts);
-            return Ok(new FrameSearchPage(results.Items.Where(item => !item.IsSeries).ToArray(), results.CanPageForward));
+            return Ok(results.ForWeb(externalId => FindWebMovie(current, user, externalId) is not null));
+        }, ct);
+    }
+
+    [HttpGet("WebPoster")]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    public async Task<IActionResult> GetWebPoster([FromQuery] string externalId, CancellationToken ct)
+    {
+        var config = Plugin.Instance?.Configuration;
+        if (GetWebUser(config) is null)
+            return NotFound();
+        if (!BrowseClient.IsValidId(externalId))
+            return BadRequest();
+
+        return await Run(async (client, current) =>
+        {
+            if (!ReferenceEquals(config, current))
+                return NoContent();
+
+            var poster = await client.GetCachedPoster(externalId, ct);
+            return poster is null ? NoContent() : Ok(new FrameWebPosterResult(poster));
         }, ct);
     }
 
@@ -247,12 +270,8 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 comparer.Equals(path, Path.TrimEndingDirectorySeparator(Path.GetFullPath(location))))) ? user : null;
     }
 
-    private Guid? FindWebMovie(FrameConfiguration config, User user, string externalId)
-    {
-        var path = Path.Combine(config.MoviesPath, "Frame-" + BrowseClient.MovieId(externalId), "movie.strm");
-        return System.IO.File.Exists(path) && library.FindByPath(path, false) is Movie movie &&
-            movie.IsVisibleStandalone(user) ? movie.Id : null;
-    }
+    private Guid? FindWebMovie(FrameConfiguration config, User user, string externalId) =>
+        FrameWebMovieIndex.Find(library, FrameWebMovieIndex.MoviePath(config.MoviesPath, BrowseClient.MovieId(externalId)), user);
 
     [Authorize(Policy = "RequiresElevation")]
     [HttpGet("Search")]
@@ -367,7 +386,8 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 if (Plugin.Instance?.Configuration is not { OnDemand: true } current || !ReferenceEquals(current, config))
                     return Conflict(new { message = "A configuração mudou. Faça uma nova busca." });
 
-                if (webConfig is not null && GetWebUser(config) is null)
+                var webUser = webConfig is null ? null : GetWebUser(config);
+                if (webConfig is not null && webUser is null)
                     return NotFound();
 
                 await SyncCatalogTask.Materialize(item with { Images = null }, config, hosts, ct,
@@ -394,6 +414,20 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 }
 
                 var changedPath = fullSeries ? folder : Path.Combine(folder, episodeFile ?? "movie.strm");
+                if (webUser is not null)
+                {
+                    try
+                    {
+                        if (FrameWebMovieIndex.Index(library, fileSystem, changedPath, item, webUser, ct) is { } itemId)
+                            return Ok(new FrameWebMovieResult(itemId));
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        logger.LogWarning("O Jellyfin não indexou imediatamente o filme do Frame {Id} ({Type}).",
+                            item.Id, ex.GetType().Name);
+                    }
+                }
+
                 monitor.ReportFileSystemChanged(changedPath);
             }
             finally
@@ -447,13 +481,14 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
     }
 
     private static bool ValidSearch(string? term, int page) =>
-        page is >= 1 and <= 100 && term?.Trim() is { Length: >= 2 and <= 120 } trimmed && !trimmed.Any(char.IsControl);
+        page > 0 && term?.Trim() is { Length: >= 2 and <= 120 } trimmed && !trimmed.Any(char.IsControl);
 
     private static string? AllowedArtwork(string? url, HashSet<string> hosts) =>
         SyncCatalogTask.MediaUrlAllowed(url, hosts) ? url : null;
 }
 
 internal sealed record FrameWebMovieResult([property: JsonPropertyName("itemId")] Guid? ItemId);
+internal sealed record FrameWebPosterResult([property: JsonPropertyName("posterUrl")] string PosterUrl);
 
 public sealed record FrameTokenRequest(string? Token);
 

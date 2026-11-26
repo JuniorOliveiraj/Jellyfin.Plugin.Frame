@@ -82,6 +82,46 @@ public sealed class BrowseClientTests
     }
 
     [Fact]
+    public void WebPageSkipsLocalMoviesAndSeriesWithoutLosingItsUpstreamIdentity()
+    {
+        var page = new FrameSearchPage([
+            new("100", "Filme da biblioteca", 2025),
+            new("200", "Série", 2026, true),
+            new("300", "Filme do Frame", 2026)
+        ], true);
+
+        var webPage = page.ForWeb(id => id == "100");
+        Assert.Equal("300", Assert.Single(webPage.Items).ExternalId);
+        Assert.True(webPage.CanPageForward);
+        Assert.NotNull(webPage.PageKey);
+
+        var repeated = (page with { Items = page.Items.Reverse().ToArray() }).ForWeb(_ => true);
+        Assert.Empty(repeated.Items);
+        Assert.True(repeated.CanPageForward);
+        Assert.Equal(webPage.PageKey, repeated.PageKey);
+        Assert.NotEqual(webPage.PageKey, new FrameSearchPage([new("401", "Outro", 2026)], true)
+            .ForWeb(_ => false).PageKey);
+    }
+
+    [Fact]
+    public async Task AcceptsPagesBeyondOneHundredAndStopsAtTheEmptyPage()
+    {
+        using var handler = new FakeApi((request, _) => request.RequestUri!.Query switch
+        {
+            "?page=101" => Json(SearchJson),
+            "?page=102" => Json("""{"items":[]}"""),
+            _ => throw new InvalidOperationException("Página inesperada.")
+        });
+        using var http = new HttpClient(handler);
+        var client = new BrowseClient(http, new Uri("https://example.org/"), "test-token");
+
+        Assert.True((await client.Search("Filme", 101, default)).CanPageForward);
+        var last = await client.Search("Filme", 102, default);
+        Assert.False(last.CanPageForward);
+        Assert.Empty(last.Items);
+    }
+
+    [Fact]
     public async Task RepeatsSearchOnceAfterCacheMissAndUsesStableId()
     {
         using var handler = new FakeApi((request, call) =>
@@ -187,6 +227,25 @@ public sealed class BrowseClientTests
     {
         Content = new StringContent(content, Encoding.UTF8, "application/json")
     };
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK, """{"posterPath":"/poster.jpg"}""", "https://image.tmdb.org/t/p/w500/poster.jpg")]
+    [InlineData(HttpStatusCode.OK, """{"posterPath":"//evil.example/image.jpg"}""", null)]
+    [InlineData(HttpStatusCode.NoContent, "", null)]
+    [InlineData(HttpStatusCode.NotFound, "", null)]
+    public async Task CachedPosterUsesOnlyDedicatedEndpointAndAcceptsMissingArtwork(
+        HttpStatusCode status, string json, string? expected)
+    {
+        using var http = new HttpClient(new FakeApi((request, _) =>
+        {
+            Assert.Equal("/api/browse/titles/123/metadata/cached", request.RequestUri!.AbsolutePath);
+            Assert.Equal("Bearer test-token", request.Headers.Authorization?.ToString());
+            return new HttpResponseMessage(status) { Content = new StringContent(json) };
+        }));
+        var client = new BrowseClient(http, new Uri("https://example.org/api/"), "test-token");
+
+        Assert.Equal(expected, await client.GetCachedPoster("123", default));
+    }
 
     private sealed class FakeApi(Func<HttpRequestMessage, int, HttpResponseMessage> respond) : HttpMessageHandler
     {
