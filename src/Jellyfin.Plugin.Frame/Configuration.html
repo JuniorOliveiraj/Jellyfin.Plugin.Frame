@@ -43,6 +43,12 @@
                     </label>
                     <div class="fieldDescription">Requer File Transformation. A busca respeita o acesso às bibliotecas de filmes e séries do Frame e as restrições parentais.</div>
                 </div>
+                <div class="checkboxContainer">
+                    <label><input is="emby-checkbox" id="frameTvSearchEnabled" type="checkbox">
+                        <span>Buscar filmes e séries pela lupa do Jellyfin para Android TV</span>
+                    </label>
+                    <div class="fieldDescription">A busca por um título completo pode adicioná-lo à biblioteca do Frame. Quando houver versões diferentes, use o nome completo exibido no FILMES-JR.</div>
+                </div>
                 <label for="frameBrowseUrl">URL base HTTPS da API FILMES-JR</label>
                 <input is="emby-input" id="frameBrowseUrl" type="url">
                 <div class="checkboxContainer">
@@ -393,6 +399,7 @@
                     savedApiUrl = config.BrowseApiUrl || "";
                     el('OnDemand').checked = savedMode;
                     el('WebSearchEnabled').checked = config.WebSearchEnabled === true;
+                    el('TvSearchEnabled').checked = config.TvSearchEnabled === true;
                     el('SyncHomeMovies').checked = config.SyncHomeMovies === true;
                     el('SyncHomeSeries').checked = config.SyncHomeSeries === true;
                     el('SyncHomeCollections').checked = config.SyncHomeCollections === true;
@@ -413,6 +420,7 @@
                     for (const [key, field] of Object.entries(fields)) config[key] = el(field).value.trim();
                     config.OnDemand = el('OnDemand').checked;
                     config.WebSearchEnabled = el('WebSearchEnabled').checked;
+                    config.TvSearchEnabled = el('TvSearchEnabled').checked;
                     config.SyncHomeMovies = el('SyncHomeMovies').checked;
                     config.SyncHomeSeries = el('SyncHomeSeries').checked;
                     config.SyncHomeCollections = el('SyncHomeCollections').checked;

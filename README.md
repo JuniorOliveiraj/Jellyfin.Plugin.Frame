@@ -30,6 +30,12 @@ Para um build local, use `dotnet test tests/Jellyfin.Plugin.Frame.Tests -c Relea
 
 Se a conta usar URLs temporárias do gateway, teste a reprodução logo após importar. O gateway FILMES-JR emite URLs com validade de oito horas quando a proteção de mídia está ativa. A renovação automática ainda está pendente. Para este teste, reimporte o filme se o URL de reprodução expirar. Se a sessão da conta expirar, entre novamente. Se estiver usando um JWT manual e ele expirar, atualize-o no painel ou na variável de ambiente.
 
+## Buscar pela lupa do Jellyfin para Android TV
+
+No painel do Frame, com a conta FILMES-JR conectada e o modo sob demanda configurado, marque **Buscar filmes e séries pela lupa do Jellyfin para Android TV** e salve. Use as pastas dedicadas já cadastradas nas bibliotecas Filme e Séries do Jellyfin, com monitoramento em tempo real.
+
+A lupa mostra os resultados da biblioteca e pode adicionar um filme ou uma série inédita quando o título completo encontra uma única correspondência desse tipo na primeira página do FILMES-JR. A importação adiciona o item à biblioteca compartilhada e respeita as permissões da conta Jellyfin e os hosts de mídia cadastrados. Consultas parciais ou ambíguas continuam exibindo os resultados locais. Para distinguir versões, use o nome completo exibido no FILMES-JR. As temporadas e episódios de uma série continuam chegando depois que ela é registrada.
+
 ## Buscar pela lupa do Jellyfin Web
 
 1. Mantenha o plugin [File Transformation](https://github.com/IAmParadox27/jellyfin-plugin-file-transformation) ativo e reinicie o servidor após instalar os plugins.

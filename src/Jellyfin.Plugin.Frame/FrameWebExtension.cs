@@ -3,6 +3,7 @@ using System.Runtime.Loader;
 using System.Text.Json;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,8 @@ public sealed class FrameWebServices : IPluginServiceRegistrator
 {
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        serviceCollection.AddScoped<FrameTvSearchFilter>();
+        serviceCollection.Configure<MvcOptions>(options => options.Filters.AddService<FrameTvSearchFilter>());
         serviceCollection.AddSingleton<FrameWebSeriesImports>();
         serviceCollection.AddHostedService(services => services.GetRequiredService<FrameWebSeriesImports>());
         serviceCollection.AddHostedService<FrameWebExtension>();

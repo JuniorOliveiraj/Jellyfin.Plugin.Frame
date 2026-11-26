@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography;
+using System.Security.Claims;
 using MediaBrowser.Common.Configuration;
 using Microsoft.AspNetCore.DataProtection;
 using System.Text.Json;
@@ -300,11 +301,15 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
         return new(itemId, progress, primaryImageReady);
     }
 
-    private (User User, bool Movies, bool Series)? GetWebAccess(FrameConfiguration? config)
+    private (User User, bool Movies, bool Series)? GetWebAccess(FrameConfiguration? config) =>
+        config is { WebSearchEnabled: true } ? GetLibraryAccess(config, User, users, library) : null;
+
+    internal static (User User, bool Movies, bool Series)? GetLibraryAccess(FrameConfiguration config,
+        ClaimsPrincipal principal, IUserManager users, ILibraryManager library)
     {
-        if (config is not { WebSearchEnabled: true } || GetOrigin(config) is null ||
-            string.Equals(User.FindFirst("Jellyfin-IsApiKey")?.Value, "true", StringComparison.OrdinalIgnoreCase) ||
-            !Guid.TryParse(User.FindFirst("Jellyfin-UserId")?.Value, out var id) || id == Guid.Empty ||
+        if (config.GetBrowseOrigin() is null ||
+            string.Equals(principal.FindFirst("Jellyfin-IsApiKey")?.Value, "true", StringComparison.OrdinalIgnoreCase) ||
+            !Guid.TryParse(principal.FindFirst("Jellyfin-UserId")?.Value, out var id) || id == Guid.Empty ||
             users.GetUserById(id) is not { } user)
             return null;
 
