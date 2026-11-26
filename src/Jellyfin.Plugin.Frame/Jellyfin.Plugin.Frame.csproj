@@ -10,6 +10,7 @@
     <PackageReference Include="Jellyfin.Model" Version="10.11.0" ExcludeAssets="runtime" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <EmbeddedResource Include="Configuration.html" />
+    <EmbeddedResource Include="WebSearch.js" />
     <EmbeddedResource Include="Frame-icon.png" LogicalName="Jellyfin.Plugin.Frame.Frame-icon.png" />
   </ItemGroup>
 </Project>

@@ -37,6 +37,12 @@
         <form id="frameSettings">
             <div class="checkboxContainer"><label><input is="emby-checkbox" id="frameOnDemand" type="checkbox"><span>Importar filmes e séries sob demanda</span></label></div>
             <div class="inputContainer" id="frameBrowseSettings">
+                <div class="checkboxContainer">
+                    <label><input is="emby-checkbox" id="frameWebSearchEnabled" type="checkbox">
+                        <span>Buscar filmes pela lupa do Jellyfin Web</span>
+                    </label>
+                    <div class="fieldDescription">Requer File Transformation. Disponível para usuários com acesso à biblioteca de filmes do Frame e sem restrições parentais.</div>
+                </div>
                 <label for="frameBrowseUrl">URL base HTTPS da API FILMES-JR</label>
                 <input is="emby-input" id="frameBrowseUrl" type="url">
                 <div class="checkboxContainer">
@@ -380,6 +386,7 @@
                     savedMode = config.OnDemand === true;
                     savedApiUrl = config.BrowseApiUrl || "";
                     el('OnDemand').checked = savedMode;
+                    el('WebSearchEnabled').checked = config.WebSearchEnabled === true;
                     el('SyncHomeMovies').checked = config.SyncHomeMovies === true;
                     el('SyncHomeSeries').checked = config.SyncHomeSeries === true;
                     updateMode();
@@ -398,6 +405,7 @@
                     const config = await ApiClient.getPluginConfiguration(id);
                     for (const [key, field] of Object.entries(fields)) config[key] = el(field).value.trim();
                     config.OnDemand = el('OnDemand').checked;
+                    config.WebSearchEnabled = el('WebSearchEnabled').checked;
                     config.SyncHomeMovies = el('SyncHomeMovies').checked;
                     config.SyncHomeSeries = el('SyncHomeSeries').checked;
                     Dashboard.processPluginConfigurationUpdateResult(await ApiClient.updatePluginConfiguration(id, config));

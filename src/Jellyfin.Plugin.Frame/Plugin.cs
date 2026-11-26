@@ -8,6 +8,7 @@ namespace Jellyfin.Plugin.Frame;
 public sealed class FrameConfiguration : BasePluginConfiguration
 {
     public bool OnDemand { get; set; }
+    public bool WebSearchEnabled { get; set; }
     public bool SyncHomeMovies { get; set; }
     public bool SyncHomeSeries { get; set; }
     public string BrowseApiUrl { get; set; } = "";

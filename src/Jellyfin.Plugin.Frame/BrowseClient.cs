@@ -146,7 +146,7 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
     }
 
     private static FrameItem MapMovie(BrowseMovie movie) =>
-        new(StableId("movie:" + movie.ExternalId), movie.Name, "movie",
+        new(MovieId(movie.ExternalId), movie.Name, "movie",
             movie.Year > 0 ? movie.Year : null, movie.Rating, movie.Description, movie.GenreNames,
             movie.DurationMinutes, movie.VideoUrl, movie.Images, null);
 
@@ -187,6 +187,8 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
         var name = string.IsNullOrWhiteSpace(episode.Name) ? $"Episódio {episode.Number}" : episode.Name;
         return new(StableId(key), episode.Number, name, null, episode.DurationMinutes, episode.PlaybackUrl);
     }
+
+    internal static Guid MovieId(string externalId) => StableId("movie:" + externalId);
 
     private static Guid StableId(string key)
     {

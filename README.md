@@ -30,6 +30,14 @@ Para um build local, use `dotnet test tests/Jellyfin.Plugin.Frame.Tests -c Relea
 
 Se a conta usar URLs temporárias do gateway, teste a reprodução logo após importar. O gateway FILMES-JR emite URLs com validade de oito horas quando a proteção de mídia está ativa. A renovação automática ainda está pendente. Para este teste, reimporte o filme se o URL de reprodução expirar. Se a sessão da conta expirar, entre novamente. Se estiver usando um JWT manual e ele expirar, atualize-o no painel ou na variável de ambiente.
 
+## Buscar pela lupa do Jellyfin Web
+
+1. Mantenha o plugin [File Transformation](https://github.com/IAmParadox27/jellyfin-plugin-file-transformation) ativo e reinicie o servidor após instalar os plugins.
+2. No painel do Frame, com o modo sob demanda configurado, marque **Buscar filmes pela lupa do Jellyfin Web** e salve. A pasta dedicada de filmes deve corresponder a uma pasta cadastrada na biblioteca. Use uma biblioteca com monitoramento em tempo real para indexar os filmes após a importação.
+3. Recarregue o Jellyfin Web e pesquise um filme pela lupa global. Abra um item em **Resultados do Frame**. O plugin importa somente o título escolhido e abre a ficha quando o Jellyfin encontra o arquivo. Se a atualização demorar, use **Abrir no Jellyfin** novamente depois que a biblioteca reconhecer o título.
+
+A busca consulta a conta FILMES-JR conectada no servidor. Ela está disponível para usuários com acesso à biblioteca de filmes do Frame e sem filtros de conteúdo por classificação, tags ou itens sem classificação. Nesta versão, a integração da lupa funciona no Jellyfin Web e retorna filmes.
+
 ## Sincronização de filmes e séries da home
 
 Ative **Sincronizar automaticamente os filmes da home FILMES-JR** no painel do Frame, mantenha o modo sob demanda e salve. Use uma conta FILMES-JR conectada, uma pasta de filmes cadastrada como biblioteca do Jellyfin e os hosts de reprodução permitidos.
