@@ -82,7 +82,7 @@ public sealed class BrowseClientTests
     }
 
     [Fact]
-    public void WebPageSkipsLocalMoviesAndSeriesWithoutLosingItsUpstreamIdentity()
+    public void WebPageFiltersByTypeAndLibraryWithoutLosingItsUpstreamIdentity()
     {
         var page = new FrameSearchPage([
             new("100", "Filme da biblioteca", 2025),
@@ -90,17 +90,21 @@ public sealed class BrowseClientTests
             new("300", "Filme do Frame", 2026)
         ], true);
 
-        var webPage = page.ForWeb(id => id == "100");
-        Assert.Equal("300", Assert.Single(webPage.Items).ExternalId);
+        var webPage = page.ForWeb(true, true, null, id => id == "100");
+        Assert.Equal(new[] { "200", "300" }, webPage.Items.Select(item => item.ExternalId));
+        Assert.Equal("300", Assert.Single(page.ForWeb(true, true, "movie", id => id == "100").Items).ExternalId);
+        Assert.Equal("200", Assert.Single(page.ForWeb(true, true, "series", _ => true).Items).ExternalId);
+        Assert.Empty(page.ForWeb(false, true, "movie", _ => false).Items);
+        Assert.Empty(page.ForWeb(true, false, "series", _ => false).Items);
         Assert.True(webPage.CanPageForward);
         Assert.NotNull(webPage.PageKey);
 
-        var repeated = (page with { Items = page.Items.Reverse().ToArray() }).ForWeb(_ => true);
+        var repeated = (page with { Items = page.Items.Reverse().ToArray() }).ForWeb(true, false, null, _ => true);
         Assert.Empty(repeated.Items);
         Assert.True(repeated.CanPageForward);
         Assert.Equal(webPage.PageKey, repeated.PageKey);
         Assert.NotEqual(webPage.PageKey, new FrameSearchPage([new("401", "Outro", 2026)], true)
-            .ForWeb(_ => false).PageKey);
+            .ForWeb(true, true, null, _ => false).PageKey);
     }
 
     [Fact]

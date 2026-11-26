@@ -2,6 +2,7 @@ using System.Reflection;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.IO;
@@ -9,22 +10,29 @@ using Xunit;
 
 namespace Jellyfin.Plugin.Frame.Tests;
 
-public sealed class WebMovieIndexTests
+public sealed class WebItemIndexTests
 {
     [Theory]
-    [InlineData(false, true)]
-    [InlineData(false, false)]
-    [InlineData(true, true)]
-    public async Task RegistersOnlyTheResolvedMovieAndReusesItsJellyfinId(bool scanRunning, bool samePath)
+    [InlineData(false, false, true)]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, true)]
+    public async Task RegistersOnlyTheResolvedItemAndReusesItsJellyfinId(bool series, bool scanRunning, bool samePath)
     {
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         var frameId = Guid.NewGuid();
-        var path = FrameWebMovieIndex.MoviePath(root, frameId);
-        var folder = Path.GetDirectoryName(path)!;
-        var movie = new TestMovie { Id = Guid.NewGuid(), Path = samePath ? path : Path.Combine(folder, "other.strm") };
+        var folder = FrameWebItemIndex.MediaFolder(root, frameId);
+        var path = series ? folder : FrameWebItemIndex.MoviePath(root, frameId);
+        var candidate = series ? (BaseItem)new TestSeries() : new TestMovie();
+        candidate.Id = Guid.NewGuid();
+        candidate.Path = samePath ? path : Path.Combine(folder, "other");
+        bool RefreshRequested() => candidate is TestSeries show ? show.RefreshRequested :
+            ((TestMovie)candidate).RefreshRequested;
         var parent = new Folder { Id = Guid.NewGuid(), Path = root };
         var user = new User("viewer", "auth", "reset");
-        var item = new FrameItem(frameId, "Filme do Frame", "movie", 2025, null, "Sinopse do catálogo", null,
+        var item = new FrameItem(frameId, "Título do Frame", series ? "series" : "movie", 2025, null, "Sinopse do catálogo", null,
             null, "https://media.example.org/movie.mp4", null, null);
         var resolveCalls = 0;
         var saved = new List<BaseItem>();
@@ -37,7 +45,10 @@ public sealed class WebMovieIndexTests
                     return scanRunning;
                 case "FindByPath":
                     if (Equals(path, args[0]))
+                    {
+                        Assert.Equal(series, args[1]);
                         return saved.SingleOrDefault();
+                    }
                     Assert.Equal(root, args[0]);
                     return parent;
                 case "GetLibraryOptions":
@@ -50,7 +61,7 @@ public sealed class WebMovieIndexTests
                     Assert.Same(parent, args[2]);
                     var directory = Assert.Single(Assert.IsAssignableFrom<IEnumerable<FileSystemMetadata>>(args[0]));
                     Assert.Equal(folder, directory.FullName);
-                    return new BaseItem[] { movie };
+                    return new BaseItem[] { candidate };
                 case "CreateItems":
                     Assert.Same(parent, args[1]);
                     saved.AddRange(Assert.IsAssignableFrom<IReadOnlyList<BaseItem>>(args[0]));
@@ -66,27 +77,35 @@ public sealed class WebMovieIndexTests
         Directory.CreateDirectory(folder);
         try
         {
-            await File.WriteAllTextAsync(path, item.VideoUrl);
-            var result = FrameWebMovieIndex.Index(library, fileSystem, path, item, user, default);
+            await File.WriteAllTextAsync(series ? Path.Combine(folder, "tvshow.nfo") : path, item.VideoUrl);
+            Guid? Index()
+            {
+                if (!series)
+                    return FrameWebItemIndex.Index(library, fileSystem, path, item, user, default);
+
+                FrameWebItemIndex.IndexSeries(library, fileSystem, path, item, default);
+                return FrameWebItemIndex.Find(library, path, user, series: true);
+            }
+            var result = Index();
 
             if (scanRunning || !samePath)
             {
                 Assert.Null(result);
                 Assert.Empty(saved);
                 Assert.Equal(scanRunning ? 0 : 1, resolveCalls);
-                Assert.False(movie.RefreshRequested);
+                Assert.False(RefreshRequested());
                 return;
             }
 
-            Assert.Equal(movie.Id, result);
-            Assert.Same(movie, Assert.Single(saved));
-            Assert.Equal(parent.Id, movie.ParentId);
-            Assert.Equal(item.Name, movie.Name);
-            Assert.Equal(item.Year, movie.ProductionYear);
-            Assert.Equal(item.Description, movie.Overview);
-            Assert.True(movie.RefreshRequested);
+            Assert.Equal(candidate.Id, result);
+            Assert.Same(candidate, Assert.Single(saved));
+            Assert.Equal(parent.Id, candidate.ParentId);
+            Assert.Equal(item.Name, candidate.Name);
+            Assert.Equal(item.Year, candidate.ProductionYear);
+            Assert.Equal(item.Description, candidate.Overview);
+            Assert.True(RefreshRequested());
 
-            Assert.Equal(movie.Id, FrameWebMovieIndex.Index(library, fileSystem, path, item, user, default));
+            Assert.Equal(candidate.Id, Index());
             Assert.Single(saved);
             Assert.Equal(1, resolveCalls);
         }
@@ -109,6 +128,15 @@ public sealed class WebMovieIndexTests
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) =>
             Handle(targetMethod!.Name, args ?? []);
+    }
+
+    private sealed class TestSeries : Series
+    {
+        public bool RefreshRequested { get; private set; }
+
+        public override bool IsVisibleStandalone(User user) => true;
+
+        public override void ChangedExternally() => RefreshRequested = true;
     }
 
     private sealed class TestMovie : Movie

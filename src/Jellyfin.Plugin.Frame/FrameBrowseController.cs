@@ -21,7 +21,8 @@ namespace Jellyfin.Plugin.Frame;
 [Route("Frame/Browse")]
 [Authorize]
 public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<FrameBrowseController> logger,
-    IApplicationPaths paths, IDataProtectionProvider protection, IUserManager users, ILibraryManager library, IFileSystem fileSystem)
+    IApplicationPaths paths, IDataProtectionProvider protection, IUserManager users, ILibraryManager library,
+    IFileSystem fileSystem, FrameWebSeriesImports seriesImports)
     : ControllerBase
 {
     [Authorize(Policy = "RequiresElevation")]
@@ -176,13 +177,17 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
     [HttpGet("WebSearch")]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public async Task<IActionResult> SearchWeb([FromQuery] string term, [FromQuery] int page = 1,
-        CancellationToken ct = default)
+        [FromQuery] string? type = null, CancellationToken ct = default)
     {
         var config = Plugin.Instance?.Configuration;
-        if (GetWebUser(config) is not { } user)
+        if (GetWebAccess(config) is not { } access)
             return NotFound();
         if (!ValidSearch(term, page))
             return BadRequest(new { message = "Digite de 2 a 120 caracteres para buscar." });
+        if (type is not (null or "movie" or "series"))
+            return BadRequest(new { message = "Tipo de conteúdo inválido." });
+        if (type == "movie" && !access.Movies || type == "series" && !access.Series)
+            return Ok(new FrameSearchPage([], false));
 
         return await Run(async (client, current) =>
         {
@@ -192,7 +197,13 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
             var artworkHosts = SyncCatalogTask.ReadMediaAllowlist(current.MediaHosts);
             artworkHosts.Add(BrowseTitleMetadata.ArtworkHost);
             var results = await client.Search(term, page, ct, artworkHosts);
-            return Ok(results.ForWeb(externalId => FindWebMovie(current, user, externalId) is not null));
+            var pageResults = results.ForWeb(access.Movies, access.Series, type,
+                externalId => FindWebMovie(current, access.User, externalId) is not null);
+            return Ok(pageResults with
+            {
+                Items = pageResults.Items.Select(item => item.IsSeries ? item with
+                    { ImportProgress = seriesImports.Progress(current, item.ExternalId) } : item).ToArray()
+            });
         }, ct);
     }
 
@@ -201,7 +212,7 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
     public async Task<IActionResult> GetWebPoster([FromQuery] string externalId, CancellationToken ct)
     {
         var config = Plugin.Instance?.Configuration;
-        if (GetWebUser(config) is null)
+        if (GetWebAccess(config) is null)
             return NotFound();
         if (!BrowseClient.IsValidId(externalId))
             return BadRequest();
@@ -220,14 +231,36 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
     public async Task<IActionResult> ImportWeb([FromBody] FrameImportRequest selection, CancellationToken ct)
     {
         var config = Plugin.Instance?.Configuration;
-        if (GetWebUser(config) is not { } user)
+        if (GetWebAccess(config) is not { } access)
             return NotFound();
         if (!ValidSearch(selection.Term, selection.Page) || !BrowseClient.IsValidId(selection.ExternalId) ||
-            selection.IsSeries == true || selection.AllEpisodes)
+            (selection.AllEpisodes || selection.RetryPending) && selection.IsSeries != true)
             return BadRequest(new { message = "Seleção inválida." });
 
-        if (FindWebMovie(config!, user, selection.ExternalId) is { } itemId)
-            return Ok(new FrameWebMovieResult(itemId));
+        if (selection.IsSeries == true)
+        {
+            if (!access.Series)
+                return NotFound();
+            var seriesId = FindWebSeries(config!, access.User, selection.ExternalId);
+            var progress = seriesImports.Progress(config!, selection.ExternalId);
+            if (!selection.RetryPending && seriesId.HasValue && progress is { Status: not "failed" })
+                return Ok(new FrameWebItemResult(seriesId, progress));
+
+            switch (seriesImports.Enqueue(config!, selection))
+            {
+                case FrameWebSeriesImports.QueueResult.Busy:
+                    return StatusCode(503, new { message = "Há muitas séries aguardando importação. Tente novamente em instantes." });
+                case FrameWebSeriesImports.QueueResult.NoPending:
+                    return Conflict(new { message = "A lista de pendências expirou ou já foi resolvida. Faça uma nova busca." });
+                default:
+                    return Accepted(new FrameWebItemResult(seriesId, seriesImports.Progress(config!, selection.ExternalId)));
+            }
+        }
+
+        if (!access.Movies)
+            return NotFound();
+        if (FindWebMovie(config!, access.User, selection.ExternalId) is { } itemId)
+            return Ok(new FrameWebItemResult(itemId));
 
         return await ImportTitle(selection with { IsSeries = false }, config, ct);
     }
@@ -237,19 +270,31 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
     public IActionResult GetWebMovie([FromQuery] string externalId)
     {
         var config = Plugin.Instance?.Configuration;
-        if (GetWebUser(config) is not { } user)
+        if (GetWebAccess(config) is not { Movies: true } access)
             return NotFound();
         if (!BrowseClient.IsValidId(externalId))
             return BadRequest();
 
-        var itemId = FindWebMovie(config!, user, externalId);
-        return Ok(new FrameWebMovieResult(itemId));
+        return Ok(new FrameWebItemResult(FindWebMovie(config!, access.User, externalId)));
     }
 
-    private User? GetWebUser(FrameConfiguration? config)
+    [HttpGet("WebSeries")]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    public IActionResult GetWebSeries([FromQuery] string externalId)
+    {
+        var config = Plugin.Instance?.Configuration;
+        if (GetWebAccess(config) is not { Series: true } access)
+            return NotFound();
+        if (!BrowseClient.IsValidId(externalId))
+            return BadRequest();
+
+        var itemId = FindWebSeries(config!, access.User, externalId);
+        return Ok(new FrameWebItemResult(itemId, seriesImports.Progress(config!, externalId)));
+    }
+
+    private (User User, bool Movies, bool Series)? GetWebAccess(FrameConfiguration? config)
     {
         if (config is not { WebSearchEnabled: true } || GetOrigin(config) is null ||
-            !Path.IsPathFullyQualified(config.MoviesPath) ||
             string.Equals(User.FindFirst("Jellyfin-IsApiKey")?.Value, "true", StringComparison.OrdinalIgnoreCase) ||
             !Guid.TryParse(User.FindFirst("Jellyfin-UserId")?.Value, out var id) || id == Guid.Empty ||
             users.GetUserById(id) is not { } user)
@@ -262,16 +307,29 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
             user.GetPreference(PreferenceKind.BlockUnratedItems).Length != 0)
             return null;
 
-        var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(config.MoviesPath));
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        return library.GetUserRootFolder().GetChildren(user, true)
+        var locations = library.GetUserRootFolder().GetChildren(user, true)
             .OfType<CollectionFolder>()
-            .Any(folder => folder.PhysicalLocations.Any(location => Path.IsPathFullyQualified(location) &&
-                comparer.Equals(path, Path.TrimEndingDirectorySeparator(Path.GetFullPath(location))))) ? user : null;
+            .SelectMany(folder => folder.PhysicalLocations)
+            .Where(Path.IsPathFullyQualified)
+            .Select(location => Path.TrimEndingDirectorySeparator(Path.GetFullPath(location)))
+            .ToHashSet(comparer);
+        bool CanAccess(string path) => Path.IsPathFullyQualified(path) &&
+            locations.Contains(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)));
+
+        var movies = CanAccess(config.MoviesPath);
+        var series = CanAccess(config.SeriesPath) &&
+            (!Path.IsPathFullyQualified(config.MoviesPath) ||
+                !HomeSync.ContainsPath(config.MoviesPath, config.SeriesPath) &&
+                !HomeSync.ContainsPath(config.SeriesPath, config.MoviesPath));
+        return movies || series ? (user, movies, series) : null;
     }
 
     private Guid? FindWebMovie(FrameConfiguration config, User user, string externalId) =>
-        FrameWebMovieIndex.Find(library, FrameWebMovieIndex.MoviePath(config.MoviesPath, BrowseClient.MovieId(externalId)), user);
+        FrameWebItemIndex.Find(library, FrameWebItemIndex.MoviePath(config.MoviesPath, BrowseClient.MovieId(externalId)), user);
+
+    private Guid? FindWebSeries(FrameConfiguration config, User user, string externalId) =>
+        FrameWebItemIndex.Find(library, FrameWebItemIndex.MediaFolder(config.SeriesPath, BrowseClient.SeriesId(externalId)), user, series: true);
 
     [Authorize(Policy = "RequiresElevation")]
     [HttpGet("Search")]
@@ -386,7 +444,7 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 if (Plugin.Instance?.Configuration is not { OnDemand: true } current || !ReferenceEquals(current, config))
                     return Conflict(new { message = "A configuração mudou. Faça uma nova busca." });
 
-                var webUser = webConfig is null ? null : GetWebUser(config);
+                var webUser = webConfig is not null && GetWebAccess(config) is { Movies: true } access ? access.User : null;
                 if (webConfig is not null && webUser is null)
                     return NotFound();
 
@@ -418,8 +476,8 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
                 {
                     try
                     {
-                        if (FrameWebMovieIndex.Index(library, fileSystem, changedPath, item, webUser, ct) is { } itemId)
-                            return Ok(new FrameWebMovieResult(itemId));
+                        if (FrameWebItemIndex.Index(library, fileSystem, changedPath, item, webUser, ct) is { } itemId)
+                            return Ok(new FrameWebItemResult(itemId));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -452,9 +510,8 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
             return BadRequest(new { message = "Ative o modo sob demanda e salve a URL base HTTPS da API." });
         try
         {
-            var token = await AccountSession(baseUri).GetAccessToken(ct)
-                ?? Environment.GetEnvironmentVariable("FRAME_API_TOKEN");
-            return await action(new BrowseClient(BrowseClient.SharedHttp, baseUri, token), config);
+            var client = await BrowseAccountSession.CreateClient(baseUri, paths.PluginConfigurationsPath, protection, ct);
+            return await action(client, config);
         }
         catch (CryptographicException)
         {
@@ -487,7 +544,9 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
         SyncCatalogTask.MediaUrlAllowed(url, hosts) ? url : null;
 }
 
-internal sealed record FrameWebMovieResult([property: JsonPropertyName("itemId")] Guid? ItemId);
+internal sealed record FrameWebItemResult(
+    [property: JsonPropertyName("itemId")] Guid? ItemId,
+    [property: JsonPropertyName("importProgress"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FrameWebSeriesProgress? ImportProgress = null);
 internal sealed record FrameWebPosterResult([property: JsonPropertyName("posterUrl")] string PosterUrl);
 
 public sealed record FrameTokenRequest(string? Token);

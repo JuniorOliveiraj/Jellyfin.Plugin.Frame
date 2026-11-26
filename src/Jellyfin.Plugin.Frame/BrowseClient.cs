@@ -31,20 +31,24 @@ public sealed record FrameSearchResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("year")] int Year,
     [property: JsonPropertyName("isSeries")] bool IsSeries = false,
-    [property: JsonPropertyName("posterUrl"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PosterUrl = null);
+    [property: JsonPropertyName("posterUrl"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PosterUrl = null,
+    [property: JsonPropertyName("importProgress"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FrameWebSeriesProgress? ImportProgress = null);
 
 public sealed record FrameSearchPage(
     [property: JsonPropertyName("items")] FrameSearchResult[] Items,
     [property: JsonPropertyName("canPageForward")] bool CanPageForward,
     [property: JsonPropertyName("pageKey"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PageKey = null)
 {
-    internal FrameSearchPage ForWeb(Func<string, bool> isIndexed)
+    internal FrameSearchPage ForWeb(bool movies, bool series, string? type, Func<string, bool> isIndexedMovie)
     {
         // Keep the identity of the upstream page even if all its results are hidden below.
         var ids = string.Join("\n", Items.Select(item => $"{item.IsSeries}:{item.ExternalId}").Order(StringComparer.Ordinal));
         return this with
         {
-            Items = Items.Where(item => !item.IsSeries && !isIndexed(item.ExternalId)).ToArray(),
+            // A series indexed from a single episode can still need the rest of its catalog.
+            Items = Items.Where(item => item.IsSeries
+                ? series && type != "movie"
+                : movies && type != "series" && !isIndexedMovie(item.ExternalId)).ToArray(),
             PageKey = ids.Length == 0 ? null : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(ids)))
         };
     }
@@ -55,7 +59,8 @@ public sealed record FrameImportRequest(
     [property: JsonPropertyName("page")] int Page,
     [property: JsonPropertyName("externalId")] string ExternalId,
     [property: JsonPropertyName("isSeries")] bool? IsSeries = null,
-    [property: JsonPropertyName("allEpisodes")] bool AllEpisodes = false);
+    [property: JsonPropertyName("allEpisodes")] bool AllEpisodes = false,
+    [property: JsonPropertyName("retryPending")] bool RetryPending = false);
 
 internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
 {
@@ -92,8 +97,9 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
     internal async Task<FrameItem?> GetTitleForImport(FrameImportRequest selection, CancellationToken ct)
     {
         var path = "browse/titles/" + Uri.EscapeDataString(selection.ExternalId);
-        var detail = await Read<BrowseDetail>(path, ct, allowMissing: true);
-        detail ??= await ReloadTitleFromSearch(selection, path, ct);
+        var detail = selection.RetryPending
+            ? await ReloadTitleFromSearch(selection, path, ct) ?? await Read<BrowseDetail>(path, ct, allowMissing: true)
+            : await Read<BrowseDetail>(path, ct, allowMissing: true) ?? await ReloadTitleFromSearch(selection, path, ct);
 
         if (detail is null || selection.IsSeries is bool expectedSeries && detail.IsSeries != expectedSeries)
             return null;
@@ -201,7 +207,7 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
             seasons = first.Episode is { } episode ? [new(first.Season, [episode])] : [];
         }
 
-        return new(StableId("series:" + series.ExternalId), series.Name, "series",
+        return new(SeriesId(series.ExternalId), series.Name, "series",
             series.Year > 0 ? series.Year : null, series.Rating, series.Description, series.GenreNames,
             null, null, series.Images, seasons);
     }
@@ -214,6 +220,7 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
     }
 
     internal static Guid MovieId(string externalId) => StableId("movie:" + externalId);
+    internal static Guid SeriesId(string externalId) => StableId("series:" + externalId);
 
     private static Guid StableId(string key)
     {

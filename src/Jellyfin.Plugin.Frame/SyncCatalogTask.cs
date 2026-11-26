@@ -123,7 +123,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
     }
 
     internal static async Task<bool> Materialize(FrameItem item, FrameConfiguration config, HashSet<string> hosts,
-        CancellationToken cancellationToken, bool preserveExistingNfo = false)
+        CancellationToken cancellationToken, bool preserveExistingNfo = false, Action<Guid>? episodeSaved = null)
     {
         if (string.Equals(item.Type, "movie", StringComparison.OrdinalIgnoreCase))
         {
@@ -150,7 +150,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             (item.Genres ?? []).Select(genre => new XElement("genre", genre)));
         AddTitleMetadata(show, item.TitleMetadata);
         var seasons = item.Seasons ?? throw new InvalidDataException("Temporadas ausentes.");
-        var episodes = new List<(int Season, string Name, string Url, XElement Nfo)>();
+        var episodes = new List<(Guid Id, int Season, string Name, string Url, XElement Nfo)>();
         var episodeIds = new HashSet<Guid>();
         var slots = new HashSet<(int, int)>();
         foreach (var season in seasons)
@@ -164,7 +164,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
                     throw new InvalidDataException("Episódio inválido ou repetido.");
                 var nfo = Metadata("episodedetails", episode.Id, episode.Name, episode.Description, episode.DurationMinutes);
                 nfo.Add(new XElement("season", season.Number), new XElement("episode", episode.Number));
-                episodes.Add((season.Number, EpisodeFileName(season.Number, episode.Number),
+                episodes.Add((episode.Id, season.Number, EpisodeFileName(season.Number, episode.Number),
                     PlaybackUrl(episode.VideoUrl, hosts), nfo));
             }
         }
@@ -175,6 +175,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             var folder = OpenFolder(series, SeasonFolderName(episode.Season));
             changed |= await WriteNfo(folder, episode.Name + ".nfo", episode.Nfo, preserveExistingNfo, cancellationToken);
             changed |= await Write(folder, episode.Name + ".strm", episode.Url, cancellationToken);
+            episodeSaved?.Invoke(episode.Id);
         }
         await ImportArtwork(series, item.Images, hosts, cancellationToken);
         return changed;

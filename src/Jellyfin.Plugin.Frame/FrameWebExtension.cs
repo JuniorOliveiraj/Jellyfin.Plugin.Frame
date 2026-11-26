@@ -11,8 +11,12 @@ namespace Jellyfin.Plugin.Frame;
 
 public sealed class FrameWebServices : IPluginServiceRegistrator
 {
-    public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost) =>
+    public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
+    {
+        serviceCollection.AddSingleton<FrameWebSeriesImports>();
+        serviceCollection.AddHostedService(services => services.GetRequiredService<FrameWebSeriesImports>());
         serviceCollection.AddHostedService<FrameWebExtension>();
+    }
 }
 
 public sealed class FrameWebExtension(ILogger<FrameWebExtension> logger) : IHostedService

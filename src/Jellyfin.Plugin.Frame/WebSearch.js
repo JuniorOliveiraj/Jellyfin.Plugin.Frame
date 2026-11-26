@@ -4,30 +4,50 @@
     const scriptUrl = new URL(document.currentScript.src);
     const endpoint = new URL('./', scriptUrl);
     let active;
+    let filter;
 
     const style = document.createElement('style');
     style.textContent = `
-        #searchPage[data-frame-has-movies] .noItemsMessage { display: none; }
+        #searchPage[data-frame-has-results] .noItemsMessage,
+        #searchPage[data-frame-type="movie"] .searchResults .verticalSection:not([data-frame-library-movies]),
+        #searchPage[data-frame-type="series"] .searchResults .verticalSection:not([data-frame-library-series]) {
+            display: none;
+        }
+        #searchPage .frame-web-filter {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: .6em;
+            margin: .75em 0;
+        }
+        #searchPage .frame-web-filter select {
+            font: inherit;
+            border: 1px solid currentColor;
+            border-radius: .35em;
+            padding: .4em .65em;
+            color: inherit;
+            background: var(--theme-background-color, #202020);
+        }
         #frame-web-results .frame-web-status:empty { display: none; }
         #frame-web-results .frame-web-cards,
-        #searchPage[data-frame-vertical] [data-frame-library-movies] .itemsContainer {
+        #searchPage[data-frame-vertical] :is([data-frame-library-movies], [data-frame-library-series]) .itemsContainer {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(min(100%, clamp(8rem, 14vw, 12rem)), 1fr));
             align-items: start;
         }
         #frame-web-results .frame-web-cards { margin: 0 -.6em; padding: 0; list-style: none; }
         #frame-web-results .frame-web-cards > .card,
-        #searchPage[data-frame-vertical] [data-frame-library-movies] .itemsContainer > .card {
+        #searchPage[data-frame-vertical] :is([data-frame-library-movies], [data-frame-library-series]) .itemsContainer > .card {
             width: 100%;
             min-width: 0;
         }
         #searchPage[data-frame-vertical] .searchResults { padding-bottom: 0 !important; }
-        #searchPage[data-frame-vertical] [data-frame-library-movies] > .emby-scrollbuttons { display: none; }
-        #searchPage[data-frame-vertical] [data-frame-library-movies] > [is="emby-scroller"] {
+        #searchPage[data-frame-vertical] :is([data-frame-library-movies], [data-frame-library-series]) > .emby-scrollbuttons { display: none; }
+        #searchPage[data-frame-vertical] :is([data-frame-library-movies], [data-frame-library-series]) > [is="emby-scroller"] {
             overflow: visible !important;
             touch-action: auto !important;
         }
-        #searchPage[data-frame-vertical] [data-frame-library-movies] .itemsContainer {
+        #searchPage[data-frame-vertical] :is([data-frame-library-movies], [data-frame-library-series]) .itemsContainer {
             width: auto !important;
             white-space: normal !important;
             transform: none !important;
@@ -111,7 +131,7 @@
         return { title: title.slice(0, match.index).trimEnd(), language };
     }
 
-    function movieLabel(item) {
+    function titleLabel(item) {
         let label = titleLanguage(item.name.trim());
         const suffix = label.title.match(/\s+(?:[-–—]\s*(\d{4})|\((\d{4})\))(\s*\([^()]+\))?\s*$/);
         const titleYear = suffix ? Number(suffix[1] || suffix[2]) : 0;
@@ -156,7 +176,7 @@
         state.pendingPosters.set(card, async () => {
             try {
                 const data = await request(state.client, 'WebPoster', { externalId: item.externalId },
-                    { signal: state.posterAbort.signal });
+                    { signal: state.viewAbort.signal });
                 if (active === state && card.isConnected && data?.posterUrl && data.posterUrl !== item.posterUrl) {
                     addPoster(container, data.posterUrl);
                 }
@@ -167,13 +187,100 @@
         state.posterObserver.observe(card);
     }
 
-    function movieCard(state, item, page) {
-        const { title, year, language } = movieLabel(item);
-        const metadata = [year, language].filter(Boolean).join(' · ');
+    function postImport(state, item, page, retryPending = false) {
+        return request(state.client, 'WebImport', null, {
+            method: 'POST',
+            body: JSON.stringify({ term: state.term, page, externalId: item.externalId,
+                isSeries: item.isSeries === true, retryPending })
+        });
+    }
+
+    function seriesProgress(state, item, page, feedback) {
+        const text = document.createElement('p');
+        text.className = 'frame-web-status';
+        text.setAttribute('role', 'status');
+
+        let current;
+        let timer;
+        let navigating = false;
+        let retrying = false;
+        const canRetry = () => ['failed', 'partial'].includes(current?.status) && current.pending > 0;
+        const schedule = () => {
+            clearTimeout(timer);
+            if (active === state && !navigating && !retrying && ['queued', 'importing'].includes(current?.status))
+                timer = setTimeout(poll, 2500);
+        };
+
+        const retry = button('Tentar episódios pendentes', async () => {
+            if (active !== state || navigating || retrying || !canRetry()) return;
+
+            retrying = true;
+            retry.disabled = true;
+            try {
+                const result = await postImport(state, item, page, true);
+                if (active !== state) return;
+                if (!result?.importProgress) throw new Error('Não foi possível repetir os episódios pendentes.');
+                update(result.importProgress);
+            } catch (error) {
+                if (active === state) text.textContent = error.message;
+            } finally {
+                retrying = false;
+                retry.disabled = navigating;
+                schedule();
+            }
+        });
+        retry.classList.add('frame-web-retry', 'frame-web-pending');
+        retry.setAttribute('aria-label', 'Tentar episódios pendentes de ' + item.name);
+        retry.hidden = true;
+        feedback.append(text, retry);
+
+        function update(progress) {
+            if (!progress || active !== state) return;
+            current = progress;
+            feedback.hidden = false;
+
+            const parts = [];
+            if (progress.status === 'queued') parts.push('Importação na fila');
+            if (progress.total > 0) parts.push(`${progress.imported} de ${progress.total} episódios importados`);
+            else if (progress.status === 'importing') parts.push('Consultando episódios');
+            if (canRetry()) parts.push(`${progress.pending} ${progress.pending === 1 ? 'pendente' : 'pendentes'}`);
+            if (progress.message) parts.push(progress.message);
+            const label = parts.join(' · ');
+            if (text.textContent !== label) text.textContent = label;
+            retry.hidden = !canRetry();
+            schedule();
+        }
+
+        async function poll() {
+            if (active !== state || navigating || retrying) return;
+            try {
+                const result = await request(state.client, 'WebSeries', { externalId: item.externalId },
+                    { signal: state.viewAbort.signal });
+                if (!navigating && !retrying) update(result?.importProgress);
+            } catch {
+                schedule();
+            }
+        }
+
+        update(item.importProgress);
+        return {
+            update,
+            canRetry,
+            setNavigating(value) {
+                navigating = value;
+                retry.disabled = navigating || retrying;
+                schedule();
+            }
+        };
+    }
+
+    function titleCard(state, item, page) {
+        const { title, year, language } = titleLabel(item);
+        const metadata = [year, item.isSeries ? 'Série' : 'Filme', language].filter(Boolean).join(' · ');
         const card = document.createElement('li');
         card.className = 'card overflowPortraitCard';
 
-        const start = () => openMovie(state, item, page, { open, feedback, status, retry });
+        const start = () => openTitle(state, item, page, { open, feedback, status, retry, progress });
         const open = button('', start);
         open.className = 'frame-web-open';
         open.disabled = !!state.opening;
@@ -190,6 +297,7 @@
         retry.setAttribute('aria-label', 'Tentar novamente: ' + title + (metadata ? ' (' + metadata + ')' : ''));
         retry.hidden = true;
         feedback.append(status, retry);
+        const progress = item.isSeries ? seriesProgress(state, item, page, feedback) : null;
 
         const box = document.createElement('span');
         box.className = 'cardBox cardBox-bottompadded';
@@ -198,7 +306,7 @@
         const padder = document.createElement('span');
         padder.className = 'cardPadder cardPadder-overflowPortrait';
         const placeholder = document.createElement('span');
-        placeholder.className = 'cardImageIcon material-icons movie';
+        placeholder.className = 'cardImageIcon material-icons ' + (item.isSeries ? 'tv' : 'movie');
         placeholder.setAttribute('aria-hidden', 'true');
         padder.append(placeholder);
         scalable.append(padder);
@@ -252,13 +360,42 @@
         return { section, status, list, footer, sentinel };
     }
 
+    function showFilter(state) {
+        if (!filter) {
+            const label = document.createElement('label');
+            label.className = 'frame-web-filter';
+            label.append('Tipo de conteúdo');
+            const select = document.createElement('select');
+            for (const [value, text] of [['', 'Todos'], ['movie', 'Filmes'], ['series', 'Séries']]) {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = text;
+                select.append(option);
+            }
+            select.addEventListener('change', syncSearch);
+            label.append(select);
+            filter = { field: state.field, label, select };
+        }
+        state.page.setAttribute('data-frame-vertical', '');
+        state.page.setAttribute('data-frame-type', state.type);
+        placeAfterLibrary(state);
+    }
+
+    function clearFilter() {
+        filter?.label.remove();
+        filter = undefined;
+    }
+
     function placeAfterLibrary(state) {
-        const parent = state.field.closest('.searchFields').parentElement;
+        const fields = state.field.closest('.searchFields');
+        const parent = fields.parentElement;
         if (parent.lastElementChild !== state.section) parent.append(state.section);
+        if (filter?.field === state.field && filter.label.parentElement !== fields) fields.append(filter.label);
 
         if (!state.page.hasAttribute('data-frame-vertical')) return;
         for (const row of state.page.querySelectorAll('.searchResults .verticalSection')) {
             row.toggleAttribute('data-frame-library-movies', !!row.querySelector('.card[data-type="Movie"]'));
+            row.toggleAttribute('data-frame-library-series', !!row.querySelector('.card[data-type="Series"]'));
         }
     }
 
@@ -268,9 +405,10 @@
         active.searchRequest?.abort();
         active.observer?.disconnect();
         active.posterObserver?.disconnect();
-        active.posterAbort.abort();
+        active.viewAbort.abort();
         active.page.removeAttribute('data-frame-vertical');
-        active.page.removeAttribute('data-frame-has-movies');
+        active.page.removeAttribute('data-frame-has-results');
+        active.page.removeAttribute('data-frame-type');
         active.section.remove();
         active = undefined;
     }
@@ -278,7 +416,7 @@
     function observeNextPage(state) {
         if (!state.hasNext) return;
         if (!window.IntersectionObserver) {
-            state.footer.append(button('Carregar mais filmes', () => loadNextPage(state)));
+            state.footer.append(button('Carregar mais resultados', () => loadNextPage(state)));
             return;
         }
 
@@ -295,16 +433,20 @@
         const controller = new AbortController();
         state.searchRequest = controller;
         const page = state.nextPage;
-        state.footer.textContent = page === 1 ? 'Buscando no Frame…' : 'Carregando mais filmes…';
+        state.footer.textContent = page === 1 ? 'Buscando no Frame…' : 'Carregando mais resultados…';
 
         try {
-            const data = await request(state.client, 'WebSearch', { term: state.term, page }, { signal: controller.signal });
+            const query = { term: state.term, page };
+            if (state.type) query.type = state.type;
+            const data = await request(state.client, 'WebSearch', query, { signal: controller.signal });
             if (active !== state || controller.signal.aborted) return;
             if (!data) {
                 state.hasNext = false;
                 state.section.hidden = true;
                 state.page.removeAttribute('data-frame-vertical');
-                state.page.removeAttribute('data-frame-has-movies');
+                state.page.removeAttribute('data-frame-has-results');
+                state.page.removeAttribute('data-frame-type');
+                clearFilter();
                 return;
             }
             if (!Array.isArray(data.items)) throw new Error('O Frame devolveu uma resposta de busca inválida.');
@@ -313,21 +455,21 @@
             if (data.pageKey) state.seenPages.add(data.pageKey);
             if (!repeated) {
                 for (const item of data.items) {
-                    if (state.seenMovies.has(item.externalId)) continue;
-                    state.seenMovies.add(item.externalId);
-                    state.list.append(movieCard(state, item, page));
+                    const key = (item.isSeries ? 'series:' : 'movie:') + item.externalId;
+                    if (state.seenTitles.has(key)) continue;
+                    state.seenTitles.add(key);
+                    state.list.append(titleCard(state, item, page));
                 }
             }
 
             state.hasNext = data.canPageForward === true && !repeated;
             state.nextPage = page + 1;
             state.section.hidden = false;
-            state.page.setAttribute('data-frame-vertical', '');
-            state.page.toggleAttribute('data-frame-has-movies', state.seenMovies.size > 0);
-            placeAfterLibrary(state);
+            state.page.toggleAttribute('data-frame-has-results', state.seenTitles.size > 0);
+            showFilter(state);
             state.footer.textContent = '';
-            if (!state.hasNext && state.seenMovies.size === 0) {
-                state.status.textContent = 'Nenhum filme adicional no Frame.';
+            if (!state.hasNext && state.seenTitles.size === 0) {
+                state.status.textContent = 'Nenhum resultado adicional no Frame.';
             }
             observeNextPage(state);
         } catch (error) {
@@ -342,10 +484,10 @@
 
     function setOpening(state, opening) {
         state.opening = opening;
-        for (const control of state.list.querySelectorAll('button')) control.disabled = opening;
+        for (const control of state.list.querySelectorAll('button:not(.frame-web-pending)')) control.disabled = opening;
     }
 
-    async function openMovie(state, item, page, { open, feedback, status, retry }) {
+    async function openTitle(state, item, page, { open, feedback, status, retry, progress }) {
         if (active !== state || state.opening) return;
 
         feedback.hidden = false;
@@ -353,23 +495,32 @@
         status.textContent = 'Importando…';
         setOpening(state, true);
         open.setAttribute('aria-busy', 'true');
+        progress?.setNavigating(true);
         try {
-            let result = await request(state.client, 'WebImport', null, {
-                method: 'POST',
-                body: JSON.stringify({ term: state.term, page, externalId: item.externalId, isSeries: false })
-            });
+            let result = await postImport(state, item, page);
             if (active !== state) return;
-            if (!result) throw new Error('O filme está indisponível. Faça uma nova busca.');
-            if (!result.itemId) status.textContent = 'Filme importado. Aguardando a biblioteca do Jellyfin…';
+            if (!result) throw new Error('Título indisponível. Faça uma nova busca.');
+            progress?.update(result.importProgress);
+            if (!result.itemId) {
+                status.textContent = item.isSeries
+                    ? 'Importando a série. A ficha abre quando o Jellyfin reconhecer o título…'
+                    : 'Filme importado. Aguardando a biblioteca do Jellyfin…';
+            }
 
             for (let attempt = 0; active === state && !result.itemId && attempt < 40; attempt++) {
                 await new Promise(resolve => setTimeout(resolve, 2000));
                 if (active !== state) return;
-                result = await request(state.client, 'WebMovie', { externalId: item.externalId });
+                result = await request(state.client, item.isSeries ? 'WebSeries' : 'WebMovie',
+                    { externalId: item.externalId });
                 if (!result) throw new Error('A biblioteca Frame ficou indisponível.');
+                progress?.update(result.importProgress);
+                if (!result.itemId && result.importProgress?.status === 'failed')
+                    throw new Error(result.importProgress.message || 'A importação da série falhou.');
             }
             if (active !== state) return;
-            if (!result.itemId) throw new Error('Filme salvo. O Jellyfin ainda está atualizando a biblioteca.');
+            if (!result.itemId) throw new Error(item.isSeries
+                ? 'A ficha da série ainda não apareceu no Jellyfin.'
+                : 'Filme salvo. O Jellyfin ainda está atualizando a biblioteca.');
 
             status.textContent = 'Abrindo no Jellyfin…';
             const details = new URLSearchParams({ id: result.itemId });
@@ -378,10 +529,11 @@
             location.hash = '/details?' + details;
         } catch (error) {
             if (active === state) {
-                status.textContent = error.message;
-                retry.hidden = false;
+                status.textContent = progress?.canRetry() ? '' : error.message;
+                retry.hidden = progress?.canRetry() ?? false;
             }
         } finally {
+            progress?.setNavigating(false);
             setOpening(state, false);
             open.removeAttribute('aria-busy');
         }
@@ -393,32 +545,37 @@
         const params = new URLSearchParams(location.hash.split('?')[1]);
         if (!field || !term || term.length < 2 || params.has('parentId')) {
             reset();
+            clearFilter();
             return;
         }
         const client = requestClient();
         if (!client) {
             reset();
+            clearFilter();
             return;
         }
-        if (active?.field === field && active.term === term && active.client.token === client.token) {
+        if (filter && filter.field !== field) clearFilter();
+        const type = filter?.select.value ?? '';
+        if (active?.field === field && active.term === term && active.type === type && active.client.token === client.token) {
             placeAfterLibrary(active);
             return;
         }
 
         reset();
         const state = {
-            field, term, client,
+            field, term, type, client,
             page: field.closest('#searchPage'),
             nextPage: 1,
             hasNext: true,
-            seenMovies: new Set(),
+            seenTitles: new Set(),
             seenPages: new Set(),
             pendingPosters: new Map(),
-            posterAbort: new AbortController(),
+            viewAbort: new AbortController(),
             ...createSection()
         };
         active = state;
-        placeAfterLibrary(state);
+        if (filter) showFilter(state);
+        else placeAfterLibrary(state);
         state.queryTimer = setTimeout(() => loadNextPage(state), 500);
     }
 

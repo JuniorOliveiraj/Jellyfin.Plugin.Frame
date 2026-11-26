@@ -33,10 +33,12 @@ Se a conta usar URLs temporárias do gateway, teste a reprodução logo após im
 ## Buscar pela lupa do Jellyfin Web
 
 1. Mantenha o plugin [File Transformation](https://github.com/IAmParadox27/jellyfin-plugin-file-transformation) ativo e reinicie o servidor após instalar os plugins.
-2. No painel do Frame, com o modo sob demanda configurado, marque **Buscar filmes pela lupa do Jellyfin Web** e salve. A pasta dedicada de filmes deve corresponder a uma pasta cadastrada na biblioteca. O monitoramento em tempo real ajuda o Jellyfin a reconhecer novos arquivos quando já existe um rastreamento em andamento.
-3. Recarregue o Jellyfin Web e pesquise um filme pela lupa global. Os filmes da biblioteca aparecem primeiro. A seção **Resultados do Frame** carrega mais filmes conforme você rola a grade. O idioma aparece junto do ano quando estiver indicado no título. Ao clicar, o cartão acompanha a importação e mostra como tentar novamente se houver erro. O plugin importa e registra apenas o título escolhido, então abre a ficha assim que o Jellyfin disponibiliza o item. Se a atualização demorar, use **Abrir no Jellyfin** novamente depois que a biblioteca reconhecer o título.
+2. No painel do Frame, com o modo sob demanda configurado, marque **Buscar filmes e séries pela lupa do Jellyfin Web** e salve. Cadastre as pastas dedicadas nas respectivas bibliotecas do Jellyfin. Ative o monitoramento em tempo real para que o servidor reconheça alterações nos arquivos.
+3. Use a lupa global e selecione **Todos**, **Filmes** ou **Séries**. Os resultados locais ficam acima da seção **Resultados do Frame**, que carrega novas páginas conforme você rola. Escolha um cartão do Frame para importar o título. A ficha abre assim que o Jellyfin reconhece o item. Para séries, o plugin grava primeiro um episódio disponível e continua a importação das outras temporadas e episódios em segundo plano, mesmo após sair da busca.
 
-A busca consulta a conta FILMES-JR conectada no servidor. Ela está disponível para usuários com acesso à biblioteca de filmes do Frame e sem filtros de conteúdo por classificação, tags ou itens sem classificação. Nesta versão, a integração da lupa funciona no Jellyfin Web e retorna filmes. Para cartões visíveis com capa ausente ou quebrada, o plugin tenta usar a capa já armazenada pelo FILMES-JR. Esse recurso requer o endpoint de metadados em cache na API.
+O cartão da série mostra quantos episódios já foram importados. Se sobrarem pendências, use **Tentar episódios pendentes** para consultar a API novamente e gravar só esses episódios. O servidor guarda o último progresso em memória por até 24 horas.
+
+A lupa consulta a conta FILMES-JR do servidor e mostra resultados dos tipos de biblioteca a que o usuário tem acesso. A integração remota fica desativada para usuários com filtros por classificação, tags ou itens sem classificação. Se um cartão visível tiver capa ausente ou quebrada, o plugin tenta usar a capa já armazenada pelo FILMES-JR. Isso requer o endpoint de metadados em cache na API.
 
 ## Sincronização de filmes e séries da home
 

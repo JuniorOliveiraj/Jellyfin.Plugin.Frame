@@ -43,6 +43,7 @@ public sealed class WebSearchTests
                     break;
                 case "WebSearch":
                 case "WebMovie":
+                case "WebSeries":
                 case "WebPoster":
                 case "WebImport":
                     Assert.Null(anonymous);
@@ -60,6 +61,6 @@ public sealed class WebSearchTests
     public void SerializesTheItemIdWithTheNameExpectedByTheWebClient()
     {
         var id = Guid.NewGuid();
-        Assert.Equal($"{{\"itemId\":\"{id}\"}}", JsonSerializer.Serialize(new FrameWebMovieResult(id)));
+        Assert.Equal($"{{\"itemId\":\"{id}\"}}", JsonSerializer.Serialize(new FrameWebItemResult(id)));
     }
 }

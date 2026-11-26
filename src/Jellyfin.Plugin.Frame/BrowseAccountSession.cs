@@ -15,6 +15,15 @@ internal sealed class BrowseAccountSession(HttpClient http, Uri origin, string p
     internal const string CredentialsFileName = "Jellyfin.Plugin.Frame.browse-token";
     internal static readonly SemaphoreSlim Gate = new(1);
 
+    internal static async Task<BrowseClient> CreateClient(Uri origin, string configurationPath,
+        IDataProtectionProvider protection, CancellationToken ct)
+    {
+        var path = Path.Combine(configurationPath, CredentialsFileName);
+        var session = new BrowseAccountSession(BrowseClient.SharedHttp, origin, path, protection);
+        var token = await session.GetAccessToken(ct) ?? Environment.GetEnvironmentVariable("FRAME_API_TOKEN");
+        return new BrowseClient(BrowseClient.SharedHttp, origin, token);
+    }
+
     internal async Task SignIn(string email, string password, CancellationToken ct)
     {
         await Gate.WaitAsync(ct);
