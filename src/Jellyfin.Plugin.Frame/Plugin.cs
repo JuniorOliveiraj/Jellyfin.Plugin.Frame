@@ -11,6 +11,7 @@ public sealed class FrameConfiguration : BasePluginConfiguration
     public bool WebSearchEnabled { get; set; }
     public bool SyncHomeMovies { get; set; }
     public bool SyncHomeSeries { get; set; }
+    public bool SyncHomeCollections { get; set; }
     public string BrowseApiUrl { get; set; } = "";
     public string CatalogUrl { get; set; } = "";
     public string MoviesPath { get; set; } = "";

@@ -53,6 +53,12 @@ Na seção **Últimas sincronizações da home**, clique em **Atualizar resumo**
 Cada filme autorizado é escrito na mesma pasta da importação manual. A tarefa preenche imagens locais ausentes quando disponíveis e mantém NFOs já existentes. Títulos indisponíveis ou com origem de mídia bloqueada ficam pendentes e são registrados individualmente.
 
 
+## Coleções da home no Jellyfin
+
+No modo sob demanda, marque **Criar coleções das seções de descoberta da home** no painel do Frame. Primeiro aguarde os filmes e as séries aparecerem nas bibliotecas. Depois, execute **Frame — Sincronizar coleções da home** em **Tarefas agendadas**. O intervalo padrão é de 30 minutos.
+
+As coleções nativas usam os nomes da API, como **Frame — Filmes para descobrir** e **Frame — Séries para descobrir**. A tarefa usa os títulos já indexados. Quando a seção muda, ela ajusta os vínculos da coleção e mantém os títulos na biblioteca. Se a home vier parcial ou algum título ainda estiver aguardando indexação, a tarefa mantém os vínculos existentes. Seções pessoais, como **Continuar assistindo**, ficam fora da sincronização.
+
 ## Recuperação de links de reprodução
 
 No modo sob demanda, a tarefa **Frame — Recuperar links de reprodução** verifica lotes de até 60 arquivos STRM a cada 30 minutos. Também pode ser executada pelo painel de tarefas do Jellyfin. Ela percorre filmes e episódios importados pelo Frame e registra os totais nos logs do servidor.

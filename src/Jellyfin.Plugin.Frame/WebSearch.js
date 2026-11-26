@@ -78,7 +78,34 @@
             border-radius: .4em;
         }
         #frame-web-results .frame-web-open:disabled { cursor: wait; }
-        #frame-web-results .frame-web-open[aria-busy="true"] .cardScalable { opacity: .6; }
+        #frame-web-results .frame-web-open .cardScalable { position: relative; }
+        #frame-web-results .frame-web-loading {
+            display: none;
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            place-items: center;
+            border-radius: inherit;
+            background: rgb(0 0 0 / 58%);
+            color: white;
+            pointer-events: none;
+        }
+        #frame-web-results .frame-web-open[aria-busy="true"] .frame-web-loading,
+        #frame-web-results [data-frame-importing] .frame-web-loading { display: grid; }
+        #frame-web-results .frame-web-loading::before {
+            content: '';
+            box-sizing: border-box;
+            width: 2rem;
+            height: 2rem;
+            border: .2rem solid rgb(255 255 255 / 34%);
+            border-top-color: currentColor;
+            border-radius: 50%;
+            animation: frame-web-spin .75s linear infinite;
+        }
+        @keyframes frame-web-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+            #frame-web-results .frame-web-loading::before { animation: none; }
+        }
         #frame-web-results .frame-web-open .cardBox,
         #frame-web-results .frame-web-open .cardScalable,
         #frame-web-results .frame-web-open .cardPadder,
@@ -195,7 +222,7 @@
         });
     }
 
-    function seriesProgress(state, item, page, feedback) {
+    function seriesProgress(state, item, page, card, feedback) {
         const text = document.createElement('p');
         text.className = 'frame-web-status';
         text.setAttribute('role', 'status');
@@ -206,8 +233,10 @@
         let retrying = false;
         const canRetry = () => ['failed', 'partial'].includes(current?.status) && current.pending > 0;
         const schedule = () => {
+            const importing = ['queued', 'importing'].includes(current?.status);
+            card.toggleAttribute('data-frame-importing', importing || retrying);
             clearTimeout(timer);
-            if (active === state && !navigating && !retrying && ['queued', 'importing'].includes(current?.status))
+            if (active === state && !navigating && !retrying && importing)
                 timer = setTimeout(poll, 2500);
         };
 
@@ -216,6 +245,8 @@
 
             retrying = true;
             retry.disabled = true;
+            text.textContent = 'Solicitando a importação dos episódios pendentes…';
+            schedule();
             try {
                 const result = await postImport(state, item, page, true);
                 if (active !== state) return;
@@ -297,7 +328,7 @@
         retry.setAttribute('aria-label', 'Tentar novamente: ' + title + (metadata ? ' (' + metadata + ')' : ''));
         retry.hidden = true;
         feedback.append(status, retry);
-        const progress = item.isSeries ? seriesProgress(state, item, page, feedback) : null;
+        const progress = item.isSeries ? seriesProgress(state, item, page, card, feedback) : null;
 
         const box = document.createElement('span');
         box.className = 'cardBox cardBox-bottompadded';
@@ -309,7 +340,10 @@
         placeholder.className = 'cardImageIcon material-icons ' + (item.isSeries ? 'tv' : 'movie');
         placeholder.setAttribute('aria-hidden', 'true');
         padder.append(placeholder);
-        scalable.append(padder);
+        const loading = document.createElement('span');
+        loading.className = 'frame-web-loading';
+        loading.setAttribute('aria-hidden', 'true');
+        scalable.append(padder, loading);
 
         const findPoster = () => observePoster(state, card, scalable, item);
         if (item.posterUrl) {

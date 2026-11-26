@@ -11,7 +11,7 @@ internal sealed record BrowseTitle(string ExternalId, string Name, int Year, boo
 internal sealed record BrowsePage(BrowseTitle[] Items);
 internal sealed record BrowsePlaybackSources(string? VideoUrl, string? BackupVideoUrl);
 internal sealed record BrowseHome(BrowseTitle? Hero, BrowseHomeRow[]? Rows, bool Partial);
-internal sealed record BrowseHomeRow(BrowseHomeItem[]? Items);
+internal sealed record BrowseHomeRow(BrowseHomeItem[]? Items, string? Id = null, string? Type = null, string? Title = null);
 internal sealed record BrowseHomeItem(BrowseTitle Item, Guid? PersistedTitleId);
 internal sealed record PersistedBrowseTitle(Guid Id, string Type, string? ExternalId, string Name, int Year,
     double? Rating, string? Description, string[]? Genres, int? DurationMinutes, string? VideoUrl,

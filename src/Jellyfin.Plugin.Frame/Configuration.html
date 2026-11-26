@@ -55,7 +55,13 @@
                         <span>Sincronizar automaticamente as séries da home FILMES-JR e todos os episódios</span>
                     </label>
                 </div>
-                <div class="fieldDescription">Execute a tarefa de filmes ou a de séries da home em Tarefas agendadas para testar agora.</div>
+                <div class="checkboxContainer">
+                    <label><input is="emby-checkbox" id="frameSyncHomeCollections" type="checkbox">
+                        <span>Criar coleções das seções de descoberta da home</span>
+                    </label>
+                    <div class="fieldDescription">Usa filmes e séries que já aparecem na biblioteca do Jellyfin.</div>
+                </div>
+                <div class="fieldDescription">Execute as sincronizações da home em Tarefas agendadas para testar agora.</div>
             </div>
             <div id="frameCatalogSettings">
                 <div class="inputContainer"><label for="frameCatalog">URL HTTPS de listagem</label><input is="emby-input" id="frameCatalog" type="url"></div>
@@ -389,6 +395,7 @@
                     el('WebSearchEnabled').checked = config.WebSearchEnabled === true;
                     el('SyncHomeMovies').checked = config.SyncHomeMovies === true;
                     el('SyncHomeSeries').checked = config.SyncHomeSeries === true;
+                    el('SyncHomeCollections').checked = config.SyncHomeCollections === true;
                     updateMode();
                     await Promise.all([updateAccountStatus(), refreshReports()]);
                 } catch {
@@ -408,6 +415,7 @@
                     config.WebSearchEnabled = el('WebSearchEnabled').checked;
                     config.SyncHomeMovies = el('SyncHomeMovies').checked;
                     config.SyncHomeSeries = el('SyncHomeSeries').checked;
+                    config.SyncHomeCollections = el('SyncHomeCollections').checked;
                     Dashboard.processPluginConfigurationUpdateResult(await ApiClient.updatePluginConfiguration(id, config));
                     savedMode = config.OnDemand;
                     savedApiUrl = config.BrowseApiUrl;

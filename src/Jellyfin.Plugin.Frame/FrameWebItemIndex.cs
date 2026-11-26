@@ -17,7 +17,11 @@ internal static class FrameWebItemIndex
         Path.Combine(MediaFolder(root, frameId), "movie.strm");
 
     internal static Guid? Find(ILibraryManager library, string path, User user, bool series = false) =>
-        Exists(path, series) ? VisibleItemId(library.FindByPath(path, series), user, series) : null;
+        VisibleItemId(FindIndexed(library, path, series), user, series);
+
+    internal static BaseItem? FindIndexed(ILibraryManager library, string path, bool series) =>
+        Exists(path, series) && library.FindByPath(path, series) is { } item && MatchesType(item, series) &&
+        item.Id != Guid.Empty ? item : null;
 
     // Call under the Frame sync lock after writing the files required by the resolver.
     internal static Guid? Index(ILibraryManager library, IFileSystem fileSystem, string path, FrameItem item,
