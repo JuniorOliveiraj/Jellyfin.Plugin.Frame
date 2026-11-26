@@ -1,5 +1,9 @@
 using System.Reflection;
+#if NET8_0
+using Jellyfin.Data.Entities;
+#else
 using Jellyfin.Database.Implementations.Entities;
+#endif
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;

@@ -23,7 +23,7 @@ public sealed class SyncHomeCollectionsTask(IApplicationPaths paths, IDataProtec
 
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() =>
     [
-        new() { Type = TaskTriggerInfoType.IntervalTrigger, IntervalTicks = TimeSpan.FromMinutes(30).Ticks }
+        FrameJellyfinCompatibility.IntervalTrigger(TimeSpan.FromMinutes(30))
     ];
 
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken ct)

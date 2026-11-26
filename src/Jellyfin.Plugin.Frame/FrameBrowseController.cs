@@ -7,8 +7,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Xml;
 using Jellyfin.Data;
-using Jellyfin.Database.Implementations.Entities;
-using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
@@ -314,10 +312,7 @@ public sealed class FrameBrowseController(ILibraryMonitor monitor, ILogger<Frame
             return null;
 
         // Remote search results don't yet have local ratings or tags to apply parental filters.
-        if (user.MaxParentalRatingScore.HasValue || user.MaxParentalRatingSubScore.HasValue ||
-            user.GetPreference(PreferenceKind.BlockedTags).Length != 0 ||
-            user.GetPreference(PreferenceKind.AllowedTags).Length != 0 ||
-            user.GetPreference(PreferenceKind.BlockUnratedItems).Length != 0)
+        if (FrameJellyfinCompatibility.HasParentalRestrictions(user))
             return null;
 
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;

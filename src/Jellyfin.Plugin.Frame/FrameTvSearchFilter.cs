@@ -3,7 +3,6 @@ using System.Text.RegularExpressions;
 using System.Text;
 
 using Jellyfin.Data.Enums;
-using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.IO;

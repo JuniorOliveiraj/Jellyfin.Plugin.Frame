@@ -21,21 +21,31 @@ $api = "https://api.github.com/repos/$Repository"
 $uploads = "https://uploads.github.com/repos/$Repository"
 $manifestPath = Join-Path $ReleaseDirectory 'manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -NoEnumerate
-$entry = $manifest[0].versions[0]
-$version = [version] $entry.version
+$entries = @($manifest[0].versions)
+if ($manifest.Count -ne 1 -or $manifest[0].guid -ne 'bb053bff-fcf8-4e86-b3b6-83b83866063e' -or
+    $entries.Count -ne 2 -or [version] $entries[0].version -le [version] $entries[1].version -or
+    [version] $entries[0].targetAbi -le [version] $entries[1].targetAbi) {
+    throw 'O manifesto precisa listar os dois pacotes do Frame, com a versão mais recente primeiro.'
+}
+$version = [version] $entries[0].version
 $tag = "v$version"
-$zipName = "Jellyfin.Plugin.Frame-$version.zip"
-$zip = Join-Path $ReleaseDirectory $zipName
-$shaFile = "$zip.sha256"
-$expectedUrl = "https://github.com/$Repository/releases/download/$tag/$zipName"
-if ($entry.sourceUrl -cne $expectedUrl -or $entry.checksum -ine (Get-FileHash -LiteralPath $zip -Algorithm MD5).Hash) {
-    throw 'O manifesto não corresponde ao ZIP desta release.'
-}
-$sha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-if ((Get-Content -LiteralPath $shaFile -Raw).Trim() -cne "$sha256  $zipName") {
-    throw 'O arquivo SHA-256 não corresponde ao ZIP desta release.'
-}
-$files = foreach ($path in @($zip, $shaFile, $manifestPath)) {
+$packagePaths = @(foreach ($entry in $entries) {
+    $packageVersion = [version] $entry.version
+    $zipName = "Jellyfin.Plugin.Frame-$packageVersion.zip"
+    $zip = Join-Path $ReleaseDirectory $zipName
+    $shaFile = "$zip.sha256"
+    $expectedUrl = "https://github.com/$Repository/releases/download/$tag/$zipName"
+    if ($entry.sourceUrl -cne $expectedUrl -or $entry.checksum -ine (Get-FileHash -LiteralPath $zip -Algorithm MD5).Hash) {
+        throw "O manifesto não corresponde ao ZIP $zipName."
+    }
+    $sha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ((Get-Content -LiteralPath $shaFile -Raw).Trim() -cne "$sha256  $zipName") {
+        throw "O arquivo SHA-256 não corresponde ao ZIP $zipName."
+    }
+    $zip
+    $shaFile
+})
+$files = foreach ($path in ($packagePaths + $manifestPath)) {
     $file = Get-Item -LiteralPath $path
     [pscustomobject] @{
         Name = $file.Name

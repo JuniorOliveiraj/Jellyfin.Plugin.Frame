@@ -1,6 +1,6 @@
 # Jellyfin.Plugin.Frame
 
-Plugin experimental para Jellyfin **10.11.x**, compilado com .NET 9 contra Jellyfin 10.11.0. Sincroniza um catálogo HTTPS em arquivos STRM e NFO. A versão e o comportamento no Homedroid ainda precisam ser verificados.
+Plugin experimental para Jellyfin **10.10.7** (.NET 8) e **10.11.x** (.NET 9). Sincroniza um catálogo HTTPS em arquivos STRM e NFO. A release inclui um pacote para cada linha do servidor. O Jellyfin usa o mesmo manifesto para selecionar a versão compatível.
 
 ## Publicação e instalação pelo catálogo
 
@@ -10,7 +10,7 @@ Plugin experimental para Jellyfin **10.11.x**, compilado com .NET 9 contra Jelly
 4. Em **Painel → Plugins → Repositórios → Novo repositório**, informe o nome **Frame** e a URL `https://github.com/USUARIO/REPOSITORIO/releases/latest/download/manifest.json`. Substitua `USUARIO/REPOSITORIO` pelos dados do seu GitHub.
 5. Em **Catálogo**, instale **Frame** e reinicie o Jellyfin Server.
 
-Para um build local, use `dotnet test tests/Jellyfin.Plugin.Frame.Tests -c Release` e `pwsh -File scripts/New-Release.ps1 -Repository USUARIO/REPOSITORIO`. Os arquivos são gerados em `artifacts/release`. O manifesto local aponta para a release correspondente.
+Para um build local, instale o SDK .NET 9 e os runtimes ASP.NET Core 8 e 9. Use `dotnet test tests/Jellyfin.Plugin.Frame.Tests -c Release` e `pwsh -File scripts/New-Release.ps1 -Repository USUARIO/REPOSITORIO`. Os arquivos são gerados em `artifacts/release`. O manifesto local aponta para a release correspondente.
 
 ## Configuração e primeiro teste
 

@@ -25,7 +25,7 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
 
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() =>
     [
-        new() { Type = TaskTriggerInfoType.IntervalTrigger, IntervalTicks = TimeSpan.FromMinutes(30).Ticks }
+        FrameJellyfinCompatibility.IntervalTrigger(TimeSpan.FromMinutes(30))
     ];
 
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
