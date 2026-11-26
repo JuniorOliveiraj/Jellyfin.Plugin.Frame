@@ -53,6 +53,12 @@ Na seção **Últimas sincronizações da home**, clique em **Atualizar resumo**
 Cada filme autorizado é escrito na mesma pasta da importação manual. A tarefa preenche imagens locais ausentes quando disponíveis e mantém NFOs já existentes. Títulos indisponíveis ou com origem de mídia bloqueada ficam pendentes e são registrados individualmente.
 
 
+## Recuperação de links de reprodução
+
+No modo sob demanda, a tarefa **Frame — Recuperar links de reprodução** verifica lotes de até 60 arquivos STRM a cada 30 minutos. Também pode ser executada pelo painel de tarefas do Jellyfin. Ela percorre filmes e episódios importados pelo Frame e registra os totais nos logs do servidor.
+
+Quando o endereço atual responde com um erro de acesso ou de disponibilidade, a tarefa solicita um novo link ao FILMES-JR e testa a origem principal e a reserva permitidas. Ela atualiza o STRM no mesmo caminho para preservar a ficha e o histórico do Jellyfin. Enquanto o link recuperado estiver gravado, sincronizações que ainda recebam o endereço rejeitado preservam o reparo. Falhas temporárias e redirecionamentos deixam o STRM como estava. Para uma importação antiga, a tarefa tenta identificar o título pelo NFO; se ele não puder ser associado ao catálogo, reimporte o título pelo painel do Frame.
+
 ## Contrato experimental da sincronização geral
 
 A URL configurada deve retornar `{ "items": [...], "nextCursor": null }`. Se houver mais páginas, preencha `nextCursor`; a próxima requisição inclui `cursor` codificado. O exemplo em `teste/catalog.json` contém um filme.

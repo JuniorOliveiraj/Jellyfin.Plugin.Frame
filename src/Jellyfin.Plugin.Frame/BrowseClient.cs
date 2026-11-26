@@ -9,6 +9,7 @@ namespace Jellyfin.Plugin.Frame;
 
 internal sealed record BrowseTitle(string ExternalId, string Name, int Year, bool IsSeries, FrameImages? Images = null);
 internal sealed record BrowsePage(BrowseTitle[] Items);
+internal sealed record BrowsePlaybackSources(string? VideoUrl, string? BackupVideoUrl);
 internal sealed record BrowseHome(BrowseTitle? Hero, BrowseHomeRow[]? Rows, bool Partial);
 internal sealed record BrowseHomeRow(BrowseHomeItem[]? Items);
 internal sealed record BrowseHomeItem(BrowseTitle Item, Guid? PersistedTitleId);
@@ -112,6 +113,23 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
         return MapMovie(movie);
     }
 
+    internal async Task<BrowsePlaybackSources?> RefreshPlayback(string externalId, int? season, int? episode,
+        CancellationToken ct)
+    {
+        var path = "browse/titles/" + Uri.EscapeDataString(externalId) + "/playback/refresh";
+        if (season.HasValue && episode.HasValue)
+            path += FormattableString.Invariant($"?season={season}&episode={episode}");
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(origin, path));
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await http.SendAsync(request, ct);
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent)
+            return null;
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<BrowsePlaybackSources>(cancellationToken: ct);
+    }
+
     internal async Task<BrowseHome> GetHome(CancellationToken ct) =>
         await Read<BrowseHome>("home", ct) ?? throw new InvalidDataException("Resposta da home vazia.");
 
@@ -179,7 +197,7 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
     private static FrameItem MapMovie(BrowseMovie movie) =>
         new(MovieId(movie.ExternalId), movie.Name, "movie",
             movie.Year > 0 ? movie.Year : null, movie.Rating, movie.Description, movie.GenreNames,
-            movie.DurationMinutes, movie.VideoUrl, movie.Images, null);
+            movie.DurationMinutes, movie.VideoUrl, movie.Images, null, ExternalId: movie.ExternalId);
 
     private static FrameItem MapSeries(BrowseSeries series, bool allEpisodes = false)
     {
@@ -209,7 +227,7 @@ internal sealed class BrowseClient(HttpClient http, Uri origin, string? token)
 
         return new(SeriesId(series.ExternalId), series.Name, "series",
             series.Year > 0 ? series.Year : null, series.Rating, series.Description, series.GenreNames,
-            null, null, series.Images, seasons);
+            null, null, series.Images, seasons, ExternalId: series.ExternalId);
     }
 
     private static FrameEpisode MapEpisode(string seriesId, int seasonNumber, BrowseEpisode episode)

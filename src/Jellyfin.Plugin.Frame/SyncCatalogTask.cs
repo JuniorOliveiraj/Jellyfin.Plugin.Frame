@@ -135,7 +135,8 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
             var url = PlaybackUrl(item.VideoUrl, hosts);
             var folder = OpenFolder(config.MoviesPath, "Frame-" + item.Id);
             var movieChanged = await WriteNfo(folder, "movie.nfo", nfo, preserveExistingNfo, cancellationToken);
-            movieChanged |= await Write(folder, "movie.strm", url, cancellationToken);
+            movieChanged |= await WriteManagedPlaybackLink(folder, "movie.strm", url, hosts, cancellationToken);
+            await WritePlaybackIdentity(folder, item, config, cancellationToken);
             await ImportArtwork(folder, item.Images, hosts, cancellationToken);
             return movieChanged;
         }
@@ -170,11 +171,12 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         }
         var series = OpenFolder(config.SeriesPath, "Frame-" + item.Id);
         var changed = await WriteNfo(series, "tvshow.nfo", show, preserveExistingNfo, cancellationToken, item.Id);
+        await WritePlaybackIdentity(series, item, config, cancellationToken);
         foreach (var episode in episodes)
         {
             var folder = OpenFolder(series, SeasonFolderName(episode.Season));
             changed |= await WriteNfo(folder, episode.Name + ".nfo", episode.Nfo, preserveExistingNfo, cancellationToken);
-            changed |= await Write(folder, episode.Name + ".strm", episode.Url, cancellationToken);
+            changed |= await WriteManagedPlaybackLink(folder, episode.Name + ".strm", episode.Url, hosts, cancellationToken);
             episodeSaved?.Invoke(episode.Id);
         }
         await ImportArtwork(series, item.Images, hosts, cancellationToken);
@@ -368,13 +370,13 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
         return path;
     }
 
-    private static void RejectFolderLinks(string path)
+    internal static void RejectFolderLinks(string path)
     {
         for (var current = new DirectoryInfo(path); current is not null; current = current.Parent)
             RejectLink(current);
     }
 
-    private static void RejectLink(FileSystemInfo entry)
+    internal static void RejectLink(FileSystemInfo entry)
     {
         if (entry.LinkTarget is not null || (entry.Exists && entry.Attributes.HasFlag(FileAttributes.ReparsePoint)))
             throw new IOException("Links não são permitidos na biblioteca gerenciada.");
@@ -464,6 +466,29 @@ public sealed class SyncCatalogTask(ILogger<SyncCatalogTask> logger) : ISchedule
 
         return seriesId is Guid id ? FillSeriesNfo(folder, target, content, id, cancellationToken) : Task.FromResult(false);
     }
+
+    private static async Task WritePlaybackIdentity(string folder, FrameItem item, FrameConfiguration config, CancellationToken ct)
+    {
+        if (config.GetBrowseOrigin() is not { } origin || item.ExternalId is not { } externalId ||
+            !FramePlaybackIdentity.Matches(externalId, item.Id, item.Type == "series"))
+            return;
+
+        await WritePlaybackIdentity(folder, new FramePlaybackIdentity(origin.AbsoluteUri, externalId, item.Name!), ct);
+    }
+
+    internal static Task<bool> WritePlaybackIdentity(string folder, FramePlaybackIdentity source, CancellationToken ct) =>
+        Write(folder, FramePlaybackIdentity.FileName, JsonSerializer.Serialize(source), ct);
+
+    private static async Task<bool> WriteManagedPlaybackLink(string folder, string name, string url, HashSet<string> hosts,
+        CancellationToken ct) =>
+        !await FramePlaybackRepair.RetainRepairedLink(Path.Combine(folder, name), url, hosts, ct) &&
+        await Write(folder, name, url, ct);
+
+    internal static Task<bool> WriteRepairStamp(string path, string name, string stamp, CancellationToken ct) =>
+        Write(Path.GetDirectoryName(path)!, name, stamp, ct);
+
+    internal static Task<bool> UpdatePlaybackLink(string path, string replacement, CancellationToken ct) =>
+        Write(Path.GetDirectoryName(path)!, Path.GetFileName(path), replacement, ct);
 
     private static Task<bool> Write(string folder, string name, string content, CancellationToken cancellationToken) =>
         WriteBytes(folder, name, System.Text.Encoding.UTF8.GetBytes(content + "\n"), cancellationToken);
